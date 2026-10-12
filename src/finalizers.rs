@@ -1,4 +1,7 @@
-use gc_arena::{lock::RefLock, Collect, Finalization, Gc, GcWeak, Mutation};
+use allocator_api2::vec;
+use gc_arena::{
+    allocator_api::MetricsAlloc, lock::RefLock, Collect, Finalization, Gc, GcWeak, Mutation,
+};
 
 use crate::{thread::ThreadInner, Thread};
 
@@ -10,7 +13,12 @@ impl<'gc> Finalizers<'gc> {
     const THREAD_ERR: &'static str = "thread finalization was missed";
 
     pub(crate) fn new(mc: &Mutation<'gc>) -> Self {
-        Finalizers(Gc::new(mc, RefLock::default()))
+        Finalizers(Gc::new(
+            mc,
+            RefLock::new(FinalizersState {
+                threads: vec::Vec::new_in(MetricsAlloc::new(mc)),
+            }),
+        ))
     }
 
     pub(crate) fn register_thread(&self, mc: &Mutation<'gc>, ptr: Gc<'gc, ThreadInner<'gc>>) {
@@ -21,6 +29,12 @@ impl<'gc> Finalizers<'gc> {
     ///
     /// This stage can cause resurrection, so the arena must be *fully re-marked* before stage two
     /// (`Finalizers::finalize`).
+    #[expect(
+        clippy::expect_used,
+        clippy::unwrap_used,
+        reason = "registered threads are only removed in `finalize`, and no thread can be \
+                  borrowed outside of `Lua::enter`, where finalization happens"
+    )]
     pub(crate) fn prepare(&self, fc: &Finalization<'gc>) {
         let state = self.0.borrow();
         for &ptr in &state.threads {
@@ -34,8 +48,14 @@ impl<'gc> Finalizers<'gc> {
     /// Assuming stage one was called (`Finalizers::prepare`) and the arena fully re-marked, this
     /// method will *not* cause any resurrection.
     ///
-    /// The arena must *immediately* transition to `CollectionPhase::Collecting` afterwards to not
+    /// The arena must *immediately* transition to `CollectionPhase::Sweeping` afterwards to not
     /// miss any finalizers.
+    #[expect(
+        clippy::expect_used,
+        clippy::unwrap_used,
+        reason = "registered threads are only removed here, and no thread can be borrowed \
+                  outside of `Lua::enter`, where finalization happens"
+    )]
     pub(crate) fn finalize(&self, fc: &Finalization<'gc>) {
         let mut state = self.0.borrow_mut(fc);
         state.threads.retain(|&ptr| {
@@ -50,8 +70,8 @@ impl<'gc> Finalizers<'gc> {
     }
 }
 
-#[derive(Default, Collect)]
+#[derive(Collect)]
 #[collect(no_drop)]
 struct FinalizersState<'gc> {
-    threads: Vec<GcWeak<'gc, ThreadInner<'gc>>>,
+    threads: vec::Vec<GcWeak<'gc, ThreadInner<'gc>>, MetricsAlloc<'gc>>,
 }

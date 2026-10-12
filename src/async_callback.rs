@@ -12,6 +12,7 @@ use std::{
 use gc_arena::{Collect, DynamicRootSet, Mutation};
 
 use crate::{
+    limits::ExternalAllocation,
     stash::{Fetchable, Stashable},
     BoxSequence, Context, Error, Execution, Function, Sequence, SequencePoll, Stack, StashedError,
     StashedFunction, StashedThread, Thread,
@@ -52,8 +53,8 @@ use crate::{
 /// # Panics
 ///
 /// All Rust yields (`.await`) within the returned future must occur from calling an async method
-/// on the `AsyncSequence` handle. If some other future is `.await`ed, this will cause the outer
-/// `Sequence` poll methods to panic.
+/// on the `AsyncSequence` handle. If some other future is `.await`ed, the outer `Sequence` poll
+/// fails with a runtime error.
 ///
 /// Methods on `AsyncSequence` must *only* be called from the returned future. Calling methods on
 /// `AsyncSequence` directly from the provided create function or from storing the `AsyncSequence`
@@ -76,15 +77,16 @@ where
     // this. This should allow soundly giving the `AsyncSequence` object a bare pointer to the
     // internals of its `BoxSequence` parent.
     //
-    // NOTE: We are not bothering to mark the `Rc` allocation here in the GC metrics. Since
-    // `DynamicRootSet` and `SequenceImpl` are always non-zero size, creating an async sequence
-    // always marks some external allocation anyway, so this is just a small inaccuracy rather
-    // than a potential way for Lua to allocate an arbitrary amount of un-marked memory.
+    // NOTE: The `Rc` allocation here and the one inside `DynamicRootSet` are not made through the
+    // GC metrics, so we mark an estimate of their size ourselves, which is unmarked when the
+    // sequence is dropped. Deep recursion through metamethods can keep many async sequences alive
+    // at once, so leaving them out would let memory usage go noticeably past the memory limit.
     //
     // This will be much easier to handle properly when `allocator_api` is stable.
     let shared = Rc::new(SharedSlot::new());
 
     let roots = DynamicRootSet::new(mc);
+    let marked = ExternalAllocation::new(mc, UNMARKED_ASYNC_SEQUENCE_BYTES);
 
     let fut = create(
         Locals {
@@ -95,8 +97,20 @@ where
             shared: shared.clone(),
         },
     );
-    BoxSequence::new(mc, SequenceImpl { shared, roots, fut })
+    BoxSequence::new(
+        mc,
+        SequenceImpl {
+            shared,
+            roots,
+            _marked: marked,
+            fut,
+        },
+    )
 }
+
+// An estimate of the bytes allocated by an async sequence outside of the GC metrics: the `Rc`
+// holding a `SharedSlot`, and the `Rc` and `RefCell` inside a `DynamicRootSet`.
+const UNMARKED_ASYNC_SEQUENCE_BYTES: usize = 128;
 
 /// Return type for futures that are driving an async sequence.
 ///
@@ -326,6 +340,8 @@ struct SequenceImpl<'gc, F> {
     shared: Rc<SharedSlot>,
     roots: DynamicRootSet<'gc>,
     #[collect(require_static)]
+    _marked: ExternalAllocation,
+    #[collect(require_static)]
     fut: F,
 }
 
@@ -345,6 +361,7 @@ where
             shared,
             roots: locals,
             fut,
+            ..
         } = unsafe { self.get_unchecked_mut() };
         let locals = *locals;
 
@@ -370,10 +387,11 @@ where
 
         match res {
             Poll::Ready(res) => {
-                assert!(
-                    next_op.is_none(),
-                    "`AsyncSequence` async method not `await`ed"
-                );
+                if next_op.is_some() {
+                    return Err(
+                        anyhow::anyhow!("`AsyncSequence` async method not `await`ed").into(),
+                    );
+                }
                 match res {
                     Ok(SequenceReturn::Return) => Ok(SequencePoll::Return),
                     Ok(SequenceReturn::Call(function)) => {
@@ -389,7 +407,9 @@ where
                 }
             }
             Poll::Pending => Ok(
-                match next_op.expect("`await` of a future other than `AsyncSequence` methods") {
+                match next_op.ok_or_else(|| {
+                    anyhow::anyhow!("`await` of a future other than `AsyncSequence` methods")
+                })? {
                     SequenceOp::Pending => SequencePoll::Pending,
                     SequenceOp::Call { function, bottom } => {
                         SequencePoll::Call { function, bottom }

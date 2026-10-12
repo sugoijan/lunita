@@ -1,0 +1,52 @@
+__len
+0
+2
+ipairs and pairs
+0
+1,2,
+0
+3 3 0
+1 1
+__eq, __lt, __le
+true false false
+error
+error
+true false
+true
+error
+unary metamethods
+table
+__call
+error
+ok called
+coroutines
+1 nil
+true 1 thread
+error bad argument #1 to '?' (Lua function expected)
+error bad argument #1 to '?' (Lua function expected)
+true true normal
+for loops
+0
+0
+0
+0
+2
+3
+library arguments
+error bad argument #2 to '?' (number expected, got table)
+error x
+error bad argument #1 to '?' (value expected)
+error bad argument #2 to '?' (value expected)
+error bad argument #3 to '?' (value expected)
+error assertion failed!
+16 nil 4
+0 1 4
+Lua 5.1
+5.1 metamethod details
+2nil
+ok true
+ok true
+error
+end error
+1 false
+2 false

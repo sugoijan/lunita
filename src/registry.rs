@@ -53,21 +53,28 @@ impl<'gc> Registry<'gc> {
     ///
     /// If the type has already been created, returns the already created instance, otherwise calls
     /// `S::create` to create a new instance and returns it.
+    #[expect(
+        clippy::unwrap_used,
+        reason = "singletons are keyed by the `TypeId` of their type"
+    )]
     pub fn singleton<S>(&self, ctx: Context<'gc>) -> &'gc Root<'gc, S>
     where
         S: for<'a> Rootable<'a> + 'static,
         Root<'gc, S>: Sized + Singleton<'gc> + Collect,
     {
+        let existing = self.singletons.borrow().get(&TypeId::of::<S>()).copied();
+        if let Some(existing) = existing {
+            return existing.downcast::<S>().unwrap();
+        }
+        // Created with no borrow held, so that `create` may ask for other singletons.
+        let v = Root::<'gc, S>::create(ctx);
         let mut singletons = self.singletons.borrow_mut(&ctx);
         match singletons.entry(TypeId::of::<S>()) {
             hash_map::Entry::Occupied(occupied) => occupied.get().downcast::<S>().unwrap(),
-            hash_map::Entry::Vacant(vacant) => {
-                let v = Root::<'gc, S>::create(ctx);
-                vacant
-                    .insert(Any::new::<S>(&ctx, v))
-                    .downcast::<S>()
-                    .unwrap()
-            }
+            hash_map::Entry::Vacant(vacant) => vacant
+                .insert(Any::new::<S>(&ctx, v))
+                .downcast::<S>()
+                .unwrap(),
         }
     }
 

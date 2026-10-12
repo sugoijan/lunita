@@ -1,14 +1,19 @@
 use std::{
     fmt,
     hash::{Hash, Hasher},
-    i64, mem,
+    mem,
 };
 
 use gc_arena::{lock::RefLock, Collect, Gc, Mutation};
 
-use crate::{Context, FromValue, IntoValue, TypeError, Value};
+use crate::{
+    fuel::{cost, fuel_for},
+    limits::Written,
+    table::Growth,
+    Context, FromValue, IntoValue, LimitError, TypeError, Value,
+};
 
-use super::raw::{InvalidTableKey, NextValue, RawTable};
+use super::raw::{InvalidTableKey, NextValue, RawTable, TableError};
 
 pub type TableInner<'gc> = RefLock<TableState<'gc>>;
 
@@ -55,6 +60,56 @@ impl<'gc> Table<'gc> {
         Self::from_parts(mc, RawTable::new(mc), None)
     }
 
+    /// A table with room for `array_capacity` and `map_capacity` elements, keyed with the hash
+    /// keys of the instance.
+    pub fn with_capacity(
+        ctx: Context<'gc>,
+        array_capacity: usize,
+        map_capacity: usize,
+    ) -> Table<'gc> {
+        match Self::try_with_capacity(ctx, array_capacity, map_capacity) {
+            Ok(table) => table,
+            // Marked as exceeded by the check; the table is made small.
+            Err(_) => Self::new(&ctx),
+        }
+    }
+
+    /// Like [`Table::with_capacity`], checking the memory limit for the room and charging fuel
+    /// for it (`Context::check_growth`); a refusal makes no table.
+    pub fn try_with_capacity(
+        ctx: Context<'gc>,
+        array_capacity: usize,
+        map_capacity: usize,
+    ) -> Result<Table<'gc>, LimitError> {
+        if array_capacity > 0 || map_capacity > 0 {
+            ctx.check_growth(Growth {
+                bytes: RawTable::capacity_bytes(array_capacity, map_capacity),
+                entries: array_capacity.saturating_add(map_capacity),
+            })?;
+        }
+        Ok(Self::with_capacity_unchecked(
+            ctx,
+            array_capacity,
+            map_capacity,
+        ))
+    }
+
+    fn with_capacity_unchecked(
+        ctx: Context<'gc>,
+        array_capacity: usize,
+        map_capacity: usize,
+    ) -> Table<'gc> {
+        let strings = ctx.interned_strings();
+        let raw_table = RawTable::with_keys(
+            &ctx,
+            array_capacity,
+            map_capacity,
+            &strings.table_hash_keys(),
+            strings.hash_generation(),
+        );
+        Self::from_parts(&ctx, raw_table, None)
+    }
+
     pub fn from_parts(
         mc: &Mutation<'gc>,
         raw_table: RawTable<'gc>,
@@ -65,6 +120,7 @@ impl<'gc> Table<'gc> {
             RefLock::new(TableState {
                 raw_table,
                 metatable,
+                queued: Written::new(),
             }),
         ))
     }
@@ -85,13 +141,30 @@ impl<'gc> Table<'gc> {
         V::from_value(ctx, self.get_value(ctx, key))
     }
 
+    /// Set a value in this table, returning the previous value.
+    ///
+    /// If the table has to grow, this first checks the memory limit of the Lua instance (see
+    /// [`crate::limits`]), and does not set the value if it would be exceeded.
     pub fn set<K: IntoValue<'gc>, V: IntoValue<'gc>>(
         self,
         ctx: Context<'gc>,
         key: K,
         value: V,
-    ) -> Result<Value<'gc>, InvalidTableKey> {
-        self.set_raw(&ctx, key.into_value(ctx), value.into_value(ctx))
+    ) -> Result<Value<'gc>, TableError> {
+        let (key, value) = (key.into_value(ctx), value.into_value(ctx));
+        let mut state = self.0.borrow_mut(&ctx);
+        // A table made without a `Context` (or before the hash seed was set) takes the instance's
+        // hash keys the first time it is set through one.
+        let strings = ctx.interned_strings();
+        if state.raw_table.hash_generation() != strings.hash_generation() {
+            let rehashed = state
+                .raw_table
+                .rekey(&strings.table_hash_keys(), strings.hash_generation());
+            ctx.charge_fuel(fuel_for(rehashed, cost::TABLE_SLOTS));
+        }
+        state
+            .raw_table
+            .try_set(key, value, |growth| ctx.check_growth(growth))
     }
 
     pub fn get_value<K: IntoValue<'gc>>(self, ctx: Context<'gc>, key: K) -> Value<'gc> {
@@ -101,14 +174,20 @@ impl<'gc> Table<'gc> {
     /// A convenience method over [`Table::set`] for setting a string field of a table.
     ///
     /// It behaves exactly the same as [`Table::set`], except since this only accepts string keys,
-    /// we know it cannot possibly error.
+    /// the only error left is the memory limit refusing to grow the table (see
+    /// [`crate::limits`]), in which case the field is not set.
     pub fn set_field<V: IntoValue<'gc>>(
         self,
         ctx: Context<'gc>,
         key: &'static str,
         value: V,
-    ) -> Value<'gc> {
-        self.set(ctx, key, value).unwrap()
+    ) -> Result<Value<'gc>, LimitError> {
+        match self.set(ctx, key, value) {
+            Ok(previous) => Ok(previous),
+            Err(TableError::Limit(err)) => Err(err),
+            // A string key is always a valid key.
+            Err(TableError::InvalidKey(_)) => Ok(Value::Nil),
+        }
     }
 
     /// Get a value from this table without any automatic type conversion.
@@ -116,7 +195,18 @@ impl<'gc> Table<'gc> {
         self.0.borrow().raw_table.get(key)
     }
 
+    /// Grows the array part of this table to fit at least `additional` more elements (see
+    /// [`RawTable::grow_array`]), checking the memory limit and charging fuel for the work first.
+    pub fn grow_array(self, ctx: Context<'gc>, additional: usize) -> Result<(), LimitError> {
+        self.0
+            .borrow_mut(&ctx)
+            .raw_table
+            .try_grow_array(additional, |growth| ctx.check_growth(growth))
+    }
+
     /// Set a value in this table without any automatic type conversion.
+    ///
+    /// Unlike [`Table::set`], this does not check the memory limit.
     pub fn set_raw(
         self,
         mc: &Mutation<'gc>,
@@ -137,19 +227,35 @@ impl<'gc> Table<'gc> {
         self.0.borrow().raw_table.length()
     }
 
-    /// Returns the next value after this key in an unspecified table iteration order.
+    /// Returns a border for this table like [`Table::length`], charging fuel for the search to
+    /// the running `Executor` (see [`Context::charge_fuel`]).
+    pub fn length_charged(self, ctx: Context<'gc>) -> i64 {
+        let (length, probes) = self.0.borrow().raw_table.length_with_probes();
+        ctx.charge_fuel(fuel_for(probes, cost::TABLE_LOOKUPS));
+        length
+    }
+
+    /// Returns the next value after this key in the table's iteration order: the array part in
+    /// index order, then the map part in insertion order.
     ///
-    /// The table order in the map portion of the table is defined by the incidental order of the
-    /// internal bucket list. This order is only guaranteed to be stable if there are no inserts
-    /// into the table, so iterating using this method while simultaneously inserting may result in
-    /// unspecified (but never unsafe) behavior. As a special case, removing from the table (setting
-    /// a value to [`Value::Nil`]) is *always* allowed, even for the currently returned key.
+    /// The order is only guaranteed to be stable if there are no inserts into the table, so
+    /// iterating using this method while simultaneously inserting may result in unspecified (but
+    /// never unsafe) behavior. As a special case, removing from the table (setting a value to
+    /// [`Value::Nil`]) is *always* allowed, even for the currently returned key.
     ///
     /// If given `Nil`, it will return the first pair in the table. If given a key that is present
     /// in the table, it will return the next pair in iteration order. If given a key that is not
-    /// present in the table, the behavior is unspecified.
+    /// present in the table, it returns [`NextValue::NotFound`].
     pub fn next(self, key: Value<'gc>) -> NextValue<'gc> {
         self.0.borrow().raw_table.next(key)
+    }
+
+    /// Like [`Table::next`], charging fuel to the running `Executor` for the removed entries it
+    /// skips (see [`Context::charge_fuel`]).
+    pub fn next_charged(self, ctx: Context<'gc>, key: Value<'gc>) -> NextValue<'gc> {
+        let (next, visited) = self.0.borrow().raw_table.next_with_cost(key);
+        ctx.charge_fuel(fuel_for(visited, cost::TABLE_SLOTS));
+        next
     }
 
     /// Iterate over the key-value pairs of the table.
@@ -216,6 +322,7 @@ impl<'gc> IntoIterator for Table<'gc> {
 pub struct TableState<'gc> {
     pub raw_table: RawTable<'gc>,
     pub metatable: Option<Table<'gc>>,
+    queued: Written,
 }
 
 impl<'gc> fmt::Debug for TableState<'gc> {

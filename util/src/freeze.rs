@@ -274,29 +274,29 @@ trait ScopeGuard {
     ///
     /// # Panics
     ///
-    /// Panics if called multiple times without `Scope::unset` being called in-between.
+    /// Panics if called multiple times without `ScopeGuard::unset` being called in-between.
     ///
     /// # SAFETY
     ///
     /// This is unsafe because the `Frozen` handle can now be used to access the value independent
     /// of its lifetime and the borrow checker cannot check this.
     ///
-    /// Users of this trait *must* call `Scope::unset` to unset it *before* the lifetime of the
+    /// Users of this trait *must* call `ScopeGuard::unset` to unset it *before* the lifetime of the
     /// held value ends.
     unsafe fn set(&mut self);
 
     /// Unsets the value from the held `Frozen` handle.
     ///
-    /// The value may be set again with `Scope::set`.
+    /// The value may be set again with `ScopeGuard::set`.
     ///
     /// # Panics
     ///
-    /// Panics if called without `Scope::set` being called first.
+    /// Panics if called without `ScopeGuard::set` being called first.
     ///
     /// # Aborts
     ///
-    /// Will *abort* the process if `Scope::unset` is called within the body of `Freeze::with` (or
-    /// similar).
+    /// Will *abort* the process if `ScopeGuard::unset` is called within the body of `Frozen::with`
+    /// (or similar).
     fn unset(&mut self);
 }
 

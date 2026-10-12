@@ -23,7 +23,10 @@ fn error_unwind() -> Result<(), ExternError> {
     lua.finish(&executor).unwrap();
     lua.try_enter(|ctx| {
         match ctx.fetch(&executor).take_result::<()>(ctx)? {
-            Err(Error::Lua(LuaError(Value::String(s)))) => assert!(s == "test error"),
+            // `error` adds the position where it was called, as in PUC-Rio Lua.
+            Err(Error::Lua(LuaError(Value::String(s)))) => {
+                assert!(s == "<anonymous>:3: test error")
+            }
             _ => panic!("wrong error returned"),
         }
         Ok(())
@@ -40,7 +43,7 @@ fn error_tostring() -> Result<(), ExternError> {
 
     let executor = lua.try_enter(|ctx| {
         let callback = Callback::from_fn(&ctx, |_, _, _| Err(TestError.into()));
-        ctx.set_global("callback", callback);
+        ctx.set_global("callback", callback).unwrap();
 
         let closure = Closure::load(
             ctx,

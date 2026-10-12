@@ -1,15 +1,19 @@
 use std::hash::{Hash, Hasher};
 
 use allocator_api2::{boxed, vec, SliceExt};
-use gc_arena::{allocator_api::MetricsAlloc, lock::Lock, Collect, Gc, Mutation};
+use gc_arena::{allocator_api::MetricsAlloc, barrier::unlock, lock::Lock, Collect, Gc, Mutation};
 use thiserror::Error;
 
 use crate::{
     compiler::{self, CompiledPrototype, FunctionRef, LineNumber},
+    compiler::{lexer::LexError, BudgetError, CompileBudget, CompileLimits},
+    constant::is_exact_float_integer,
+    hash::HashKeys,
+    limits::{Traced, Written},
     opcode::OpCode,
     thread::OpenUpValue,
     types::UpValueDescriptor,
-    Constant, Context, String, Table, Value,
+    Compat, Constant, Context, LimitError, String, Table, Value,
 };
 
 // Note: These errors must not have #[error(transparent)] so that
@@ -21,6 +25,9 @@ pub enum CompilerError {
     Parsing(#[from] compiler::ParseError),
     #[error("compile error")]
     Compilation(#[from] compiler::CompileError),
+    /// Compiling the chunk would exceed the memory or string length limit of the Lua instance.
+    #[error("limit error")]
+    Limit(#[from] LimitError),
 }
 
 /// A compiled Lua function.
@@ -43,6 +50,7 @@ pub struct FunctionPrototype<'gc> {
     pub opcode_line_numbers: boxed::Box<[(usize, LineNumber)], MetricsAlloc<'gc>>,
     pub upvalues: boxed::Box<[UpValueDescriptor], MetricsAlloc<'gc>>,
     pub prototypes: boxed::Box<[Gc<'gc, FunctionPrototype<'gc>>], MetricsAlloc<'gc>>,
+    queued: Traced,
 }
 
 impl<'gc> FunctionPrototype<'gc> {
@@ -106,16 +114,33 @@ impl<'gc> FunctionPrototype<'gc> {
                 opcode_line_numbers: opcode_line_numbers.into_boxed_slice(),
                 upvalues: upvalues.into_boxed_slice(),
                 prototypes: prototypes.into_boxed_slice(),
+                queued: Traced::new(),
             }
         }
 
         new(mc, chunk_name, compiled_function, &map_string)
     }
 
+    /// Compile a chunk, within the memory and string length limits of the Lua instance (see
+    /// [`crate::limits`]).
     pub fn compile(
         ctx: Context<'gc>,
         source_name: &str,
         source: &[u8],
+    ) -> Result<FunctionPrototype<'gc>, CompilerError> {
+        let budget = CompileBudget::new(CompileLimits::for_context(ctx, None));
+        Self::compile_with_budget(ctx, source_name, source, &budget)
+    }
+
+    /// Compile a chunk, charging the resources used to `budget`.
+    ///
+    /// Exceeding the memory or string length limits of the budget is a [`CompilerError::Limit`]
+    /// (and marks the limit as exceeded, see [`Context::exceed_limit`]).
+    pub fn compile_with_budget(
+        ctx: Context<'gc>,
+        source_name: &str,
+        source: &[u8],
+        budget: &CompileBudget,
     ) -> Result<FunctionPrototype<'gc>, CompilerError> {
         #[derive(Copy, Clone)]
         struct Interner<'gc>(Context<'gc>);
@@ -126,12 +151,38 @@ impl<'gc> FunctionPrototype<'gc> {
             fn intern(&mut self, s: &[u8]) -> Self::String {
                 self.0.intern(s)
             }
+
+            fn hash_keys(&self) -> HashKeys {
+                self.0.interned_strings().table_hash_keys()
+            }
         }
 
         let interner = Interner(ctx);
 
-        let chunk = compiler::parse_chunk(source, interner)?;
-        let compiled_function = compiler::compile_chunk(&chunk, interner)?;
+        let chunk =
+            compiler::parse_chunk_with_budget(source, interner, budget).map_err(|err| match err
+                .kind
+            {
+                compiler::ParseErrorKind::Budget(BudgetError::Memory) => {
+                    CompilerError::Limit(ctx.exceed_limit(LimitError::Memory))
+                }
+                compiler::ParseErrorKind::LexError(LexError::StringTooLong) => {
+                    CompilerError::Limit(ctx.exceed_limit(LimitError::StringLength))
+                }
+                _ => CompilerError::Parsing(err),
+            })?;
+        let compiled_function = compiler::compile_chunk_with_budget(&chunk, interner, budget)
+            .map_err(|err| match err.kind {
+                compiler::CompileErrorKind::Budget(BudgetError::Memory) => {
+                    CompilerError::Limit(ctx.exceed_limit(LimitError::Memory))
+                }
+                _ => CompilerError::Compilation(err),
+            })?;
+        drop(chunk);
+        let compiled_function = match ctx.compat() {
+            Compat::Lua51 => lua51_constants(compiled_function),
+            Compat::Default => compiled_function,
+        };
 
         Ok(FunctionPrototype::from_compiled(
             &ctx,
@@ -141,6 +192,25 @@ impl<'gc> FunctionPrototype<'gc> {
     }
 }
 
+// Lua 5.1 only has floats: integer constants past 2^53 are the floats they round to (the constant
+// folder leaves operations on them to run time).
+fn lua51_constants<S>(mut proto: CompiledPrototype<S>) -> CompiledPrototype<S> {
+    fn convert<S>(proto: &mut CompiledPrototype<S>) {
+        for c in &mut proto.constants {
+            if let Constant::Integer(i) = *c {
+                if !is_exact_float_integer(i) {
+                    *c = Constant::Number(i as f64);
+                }
+            }
+        }
+        for p in &mut proto.prototypes {
+            convert(p);
+        }
+    }
+    convert(&mut proto);
+    proto
+}
+
 #[derive(Debug, Copy, Clone, Collect)]
 #[collect(no_drop)]
 pub enum UpValueState<'gc> {
@@ -148,7 +218,13 @@ pub enum UpValueState<'gc> {
     Closed(Value<'gc>),
 }
 
-pub type UpValueInner<'gc> = Lock<UpValueState<'gc>>;
+/// The state of an upvalue, with the field that counts it for the memory limit's reserve.
+#[derive(Debug, Collect)]
+#[collect(no_drop)]
+pub struct UpValueInner<'gc> {
+    state: Lock<UpValueState<'gc>>,
+    queued: Written,
+}
 
 #[derive(Debug, Collect, Copy, Clone)]
 #[collect(no_drop)]
@@ -156,7 +232,13 @@ pub struct UpValue<'gc>(Gc<'gc, UpValueInner<'gc>>);
 
 impl<'gc> UpValue<'gc> {
     pub fn new(mc: &Mutation<'gc>, state: UpValueState<'gc>) -> Self {
-        Self(Gc::new(mc, Lock::new(state)))
+        Self(Gc::new(
+            mc,
+            UpValueInner {
+                state: Lock::new(state),
+                queued: Written::new(),
+            },
+        ))
     }
 
     pub fn from_inner(inner: Gc<'gc, UpValueInner<'gc>>) -> Self {
@@ -168,11 +250,11 @@ impl<'gc> UpValue<'gc> {
     }
 
     pub fn get(self) -> UpValueState<'gc> {
-        self.0.get()
+        self.0.state.get()
     }
 
     pub fn set(self, mc: &Mutation<'gc>, state: UpValueState<'gc>) {
-        self.0.set(mc, state)
+        unlock!(Gc::write(mc, self.0), UpValueInner, state).set(state);
     }
 }
 
@@ -189,6 +271,7 @@ pub enum ClosureError {
 pub struct ClosureInner<'gc> {
     proto: Gc<'gc, FunctionPrototype<'gc>>,
     upvalues: vec::Vec<UpValue<'gc>, MetricsAlloc<'gc>>,
+    queued: Traced,
 }
 
 /// A garbage collected pointer to an executable Lua function.
@@ -226,19 +309,26 @@ impl<'gc> Closure<'gc> {
         let mut upvalues = vec::Vec::new_in(MetricsAlloc::new(mc));
 
         if !proto.upvalues.is_empty() {
-            if proto.upvalues.len() > 1 || proto.upvalues[0] != UpValueDescriptor::Environment {
+            if *proto.upvalues != [UpValueDescriptor::Environment] {
                 return Err(ClosureError::HasUpValues);
             } else if let Some(environment) = environment {
-                upvalues.push(UpValue(Gc::new(
+                upvalues.push(UpValue::new(
                     mc,
-                    Lock::new(UpValueState::Closed(Value::Table(environment))),
-                )));
+                    UpValueState::Closed(Value::Table(environment)),
+                ));
             } else {
                 return Err(ClosureError::RequiresEnv);
             }
         }
 
-        Ok(Closure(Gc::new(mc, ClosureInner { proto, upvalues })))
+        Ok(Closure(Gc::new(
+            mc,
+            ClosureInner {
+                proto,
+                upvalues,
+                queued: Traced::new(),
+            },
+        )))
     }
 
     pub fn from_parts(
@@ -246,7 +336,14 @@ impl<'gc> Closure<'gc> {
         proto: Gc<'gc, FunctionPrototype<'gc>>,
         upvalues: vec::Vec<UpValue<'gc>, MetricsAlloc<'gc>>,
     ) -> Self {
-        Self(Gc::new(mc, ClosureInner { proto, upvalues }))
+        Self(Gc::new(
+            mc,
+            ClosureInner {
+                proto,
+                upvalues,
+                queued: Traced::new(),
+            },
+        ))
     }
 
     pub fn from_inner(inner: Gc<'gc, ClosureInner<'gc>>) -> Self {
@@ -274,7 +371,12 @@ impl<'gc> Closure<'gc> {
         env: Table<'gc>,
     ) -> Result<Closure<'gc>, CompilerError> {
         let proto = FunctionPrototype::compile(ctx, name.unwrap_or("<anonymous>"), source)?;
-        Ok(Closure::new(&ctx, proto, Some(env)).unwrap())
+        #[expect(
+            clippy::unwrap_used,
+            reason = "a compiled chunk has no upvalues other than _ENV, and _ENV is provided"
+        )]
+        let closure = Closure::new(&ctx, proto, Some(env)).unwrap();
+        Ok(closure)
     }
 
     pub fn prototype(self) -> Gc<'gc, FunctionPrototype<'gc>> {

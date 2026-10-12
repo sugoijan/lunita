@@ -54,7 +54,9 @@ impl<'gc> Function<'gc> {
             ) -> Result<SequencePoll<'gc>, Error<'gc>> {
                 let this = self.get_mut();
                 let fns = (*this.0).as_ref();
-                let function = fns[this.1];
+                let Some(&function) = fns.get(this.1) else {
+                    return Ok(SequencePoll::Return);
+                };
                 this.1 += 1;
                 if this.1 == fns.len() {
                     Ok(SequencePoll::TailCall(function))

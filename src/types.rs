@@ -53,6 +53,13 @@ impl Opt254 {
         }
     }
 
+    /// # Panics
+    ///
+    /// Panics if given `Some(255)`, use [`Opt254::try_new`] to handle it instead.
+    #[expect(
+        clippy::expect_used,
+        reason = "documented to panic, the library only uses `try_new`, `try_some` and `none`"
+    )]
     pub fn new(v: Option<u8>) -> Opt254 {
         Opt254::try_new(v).expect("Opt254 cannot hold Some(255)")
     }
@@ -66,7 +73,7 @@ impl Opt254 {
     }
 
     pub fn none() -> Opt254 {
-        Opt254::new(None)
+        Opt254(255)
     }
 
     pub fn is_some(self) -> bool {

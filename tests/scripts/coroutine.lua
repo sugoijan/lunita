@@ -43,7 +43,7 @@ do
 
     assert(
         e1 == true and r1 == 1 and s1 == "suspended" and
-        e2 == false and r2 == 'test error' and s2 == "dead")
+        e2 == false and r2:match(": test error$") and s2 == "dead")
 end
 
 do
@@ -102,4 +102,15 @@ do
     assert(pcall(function()
         coroutine.yieldto(co)
     end) == false)
+end
+
+-- A coroutine waiting on the one it resumed is "normal".
+do
+    local outer
+    outer = coroutine.create(function()
+        local inner = coroutine.create(function() return coroutine.status(outer) end)
+        return coroutine.resume(inner)
+    end)
+    local ok, resumed, status = coroutine.resume(outer)
+    assert(ok and resumed and status == "normal", tostring(status))
 end

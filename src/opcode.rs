@@ -75,7 +75,7 @@ pub enum Operation {
     /// Expects the table to be at the `base` index, and it expects a register for the last set
     /// table index at `base + 1`. The register at `base + 1` must *always* be an integer.
     ///
-    /// On execution, it will set N values in the table from indexes `base + 1..base + 1 + n`,
+    /// On execution, it will set N values in the table from registers `base + 2..base + 2 + n`,
     /// offset all of the indexes by the `base + 1` starting index, and increment the starting index
     /// by however many values were set.
     SetList {
@@ -131,24 +131,34 @@ pub enum Operation {
         dest: RegisterIndex,
         proto: PrototypeIndex,
     },
-    /// Used to set up for a numeric for loop:
+    /// Used to set up for a numeric for loop, as Lua 5.4 does. With an integer start and step, the
+    /// loop is an integer loop, and the number of iterations left replaces the limit:
     ///
-    /// R(base) -= R(base + 2)
-    /// pc += jump
+    /// R(base + 1) = count; R(base + 3) = R(base)
+    ///
+    /// otherwise the three values are converted to floats and R(base + 3) = R(base). If the loop
+    /// runs no iteration at all, `pc += jump + 1` skips the body and its `NumericForLoop`.
     NumericForPrep {
         base: RegisterIndex,
         jump: i16,
     },
-    /// Used to iterate a numeric for loop:
+    /// Used to iterate a numeric for loop. For an integer loop:
+    ///
+    /// if R(base + 1) > 0 then
+    ///     R(base + 1) -= 1; R(base) += R(base + 2); R(base + 3) = R(base)
+    ///     pc += jump
+    /// end
+    ///
+    /// For a float loop:
     ///
     /// R(base) += R(base + 2)
     /// if R(base) <?= R(base + 1) then
-    ///     pc += jump
     ///     R(base + 3) = R(base)
+    ///     pc += jump
     /// end
     ///
-    /// The `<?=` operator here means "less than" if the step (aka R(base + 2)) is positive, and
-    /// "greater than" if the step is negative
+    /// The `<?=` operator here means "less than or equal" if the step (aka R(base + 2)) is
+    /// positive, and "greater than or equal" if the step is negative
     NumericForLoop {
         base: RegisterIndex,
         jump: i16,

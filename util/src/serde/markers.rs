@@ -1,5 +1,5 @@
 use gc_arena::{Collect, Rootable};
-use piccolo::{Callback, CallbackReturn, Context, Singleton, Table, UserData};
+use piccolo::{Callback, CallbackReturn, Context, LimitError, Singleton, Table, UserData};
 
 #[derive(Collect)]
 #[collect(no_drop)]
@@ -9,7 +9,8 @@ impl<'gc> Singleton<'gc> for UnitSingleton<'gc> {
     fn create(ctx: Context<'gc>) -> Self {
         let ud = UserData::new_static(&ctx, ());
         let mt = Table::new(&ctx);
-        mt.set_field(
+        // Refused only past the memory limit, where the marker shows as a plain userdata.
+        let _ = mt.set_field(
             ctx,
             "__tostring",
             Callback::from_fn(&ctx, |ctx, _, mut stack| {
@@ -40,7 +41,8 @@ impl<'gc> Singleton<'gc> for NoneSingleton<'gc> {
     fn create(ctx: Context<'gc>) -> Self {
         let ud = UserData::new_static(&ctx, None);
         let mt = Table::new(&ctx);
-        mt.set_field(
+        // Refused only past the memory limit, where the marker shows as a plain userdata.
+        let _ = mt.set_field(
             ctx,
             "__tostring",
             Callback::from_fn(&ctx, |ctx, _, mut stack| {
@@ -61,7 +63,8 @@ pub fn is_none<'gc>(ud: UserData<'gc>) -> bool {
     ud.is_static::<None>()
 }
 
-pub fn set_globals<'gc>(ctx: Context<'gc>) {
-    ctx.set_global("unit", unit(ctx));
-    ctx.set_global("none", none(ctx));
+pub fn set_globals<'gc>(ctx: Context<'gc>) -> Result<(), LimitError> {
+    ctx.set_global("unit", unit(ctx))?;
+    ctx.set_global("none", none(ctx))?;
+    Ok(())
 }

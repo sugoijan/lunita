@@ -1,3 +1,4 @@
+mod budget;
 mod compiler;
 pub mod interning;
 pub mod lexer;
@@ -7,8 +8,12 @@ mod register_allocator;
 pub mod string_utils;
 
 pub use self::{
-    compiler::{compile_chunk, CompileError, CompileErrorKind, CompiledPrototype, FunctionRef},
+    budget::{BudgetError, CompileBudget, CompileLimits},
+    compiler::{
+        compile_chunk, compile_chunk_with_budget, CompileError, CompileErrorKind,
+        CompiledPrototype, FunctionRef,
+    },
     interning::StringInterner,
     lexer::LineNumber,
-    parser::{parse_chunk, ParseError, ParseErrorKind},
+    parser::{parse_chunk, parse_chunk_with_budget, ParseError, ParseErrorKind},
 };

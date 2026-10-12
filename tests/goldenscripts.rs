@@ -169,7 +169,8 @@ fn test_goldenscripts() {
 
         let tx = tx.clone();
         lua.enter(|ctx| {
-            ctx.set_global("print", print_callback(ctx, tx.clone()));
+            ctx.set_global("print", print_callback(ctx, tx.clone()))
+                .unwrap();
         });
 
         let compile_result = lua.try_enter(|ctx| {

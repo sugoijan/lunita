@@ -1,0 +1,117 @@
+error
+false plain
+false level 0
+false errors.lua:15: level 1
+false errors.lua:16: level 1
+false errors.lua:18: level 2
+false errors.lua:19: level 2
+false errors.lua:25: level 3
+false too deep
+false errors.lua:27: 42
+false 42
+false table
+false nil
+false nil
+false true
+true
+runtime errors
+false
+false
+false
+false
+true 1 2 3
+xpcall
+true ok 2
+false handled: errors.lua:45: failed
+false table
+false error in error handling
+false caught
+true 0
+false 1
+true false error in error handling
+nested pcall
+false 100
+true false x
+false
+select
+0 1 2 3
+a b c
+b c
+c
+
+c
+a b c
+false false false
+b c
+b c
+assert
+true true unused
+true 1 2 3
+false assertion failed!
+false message
+false
+load
+2
+false [string "error("in chunk")"]:1: in chunk
+false in chunk
+false [string "named"]:1: in chunk
+false named:1: in chunk
+false [string "..."]:3: on line 3
+false [string "local x = 1 -- a long chunk that does not f..."]:2: x
+true
+3
+library errors
+false errors.lua:102: bad argument #1 to 'rep' (string expected, got no value)
+false errors.lua:103: bad argument #2 to 'rep' (number expected, got table)
+false errors.lua:104: assertion failed!
+false errors.lua:105: message
+false errors.lua:106: 42
+false errors.lua:107: bad argument #2 to 'assert' (string expected, got table)
+false assertion failed!
+false errors.lua:109: bad argument #1 to 'setmetatable' (table expected, got number)
+false errors.lua:110: bad argument #2 to 'setmetatable' (nil or table expected)
+false errors.lua:111: bad argument #2 to 'setmetatable' (nil or table expected)
+false errors.lua:112: wrong number of arguments to 'insert'
+false errors.lua:113: invalid value (table) at index 2 in table for 'concat'
+false errors.lua:114: bad argument #1 to 'tostring' (value expected)
+false errors.lua:115: bad argument #1 to 'type' (value expected)
+false errors.lua:116: bad argument #1 to 'tonumber' (value expected)
+false errors.lua:117: bad argument #2 to 'tonumber' (base out of range)
+false errors.lua:118: bad argument #1 to 'collectgarbage' (invalid option 'nope')
+false invalid key to 'next'
+false errors.lua:120: bad argument #1 to 'pairs' (table expected, got no value)
+false errors.lua:121: bad argument #1 to 'ipairs' (table expected, got number)
+tail calls, pcall and xpcall of values that cannot be called, assert bytes
+false errors.lua:124: bad argument #1 to 'rep' (string expected, got no value)
+false errors.lua:126: tail
+false
+false errors.lua:129: bad argument #1 to 'pcall' (value expected)
+false handled
+false error in error handling
+false errors.lua:132: bad argument #2 to 'xpcall' (value expected)
+false 1 a
+false errors.lua:135: bad argument #1 to 'randomseed' (number expected, got no value)
+
+true
+true
+1e+15 9.007199254741e+15 0.3 3
+1 2.5 x
+false invalid value (table) at index 2 in table for 'concat'
+tostring
+false x
+false x
+number 42
+1 a
+1 nil
+true
+chunk names
+fffffffffffffffffffffffffffffffffffffffffffffffffff:1: x
+fffffffffffffffffffffffffffffffffffffffffffffffffff:1: x
+ffffffffffffffffffffffffffffffffffffffffffffffffffff:1: x
+ffffffffffffffffffffffffffffffffffffffffffffffffffff:1: x
+...ffffffffffffffffffffffffffffffffffffffffffffffffffff:1: x
+fffffffffffffffffffffffffffffffffffffffffffffffffffff:1: x
+...ffffffffffffffffffffffffffffffffffffffffffffffffffff:1: x
+fffffffffffffffffffffffffffffffffffffffffffffffffffffff:1: x
+...ffffffffffffffffffffffffffffffffffffffffffffffffffff:1: x
+fffffffffffffffffffffffffffffffffffffffffffffffffffffffffff:1: x

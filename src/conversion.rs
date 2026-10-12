@@ -1,6 +1,7 @@
-use std::{array, iter, ops, string::String as StdString};
+use std::{iter, ops, string::String as StdString};
 
 use crate::{
+    fuel::{cost, fuel_for},
     Callback, Closure, Context, Function, String, Table, Thread, TypeError, UserData, Value,
 };
 
@@ -117,11 +118,37 @@ where
     }
 }
 
+// A stable version of `std::array::try_from_fn`.
+fn try_array_from_fn<T, const N: usize>(
+    f: impl FnMut(usize) -> Result<T, TypeError>,
+) -> Result<[T; N], TypeError> {
+    let values = (0..N).map(f).collect::<Result<Vec<T>, TypeError>>()?;
+    // There are always exactly `N` values.
+    values.try_into().map_err(|_| TypeError {
+        expected: "array",
+        found: "sequence",
+    })
+}
+
+// Sets `table[i]`, returning whether it could: an integer key is always a valid key, and a growth
+// the memory limit refuses marks the limit as exceeded, which stops the running executor. The
+// rest of a sequence is then left out (each refused entry would scan the table again).
+fn set_sequence_entry<'gc>(
+    ctx: Context<'gc>,
+    table: Table<'gc>,
+    i: i64,
+    v: impl IntoValue<'gc>,
+) -> bool {
+    table.set(ctx, Value::Integer(i), v.into_value(ctx)).is_ok()
+}
+
 impl<'gc, T: IntoValue<'gc>> IntoValue<'gc> for Vec<T> {
     fn into_value(self, ctx: Context<'gc>) -> Value<'gc> {
         let table = Table::new(&ctx);
-        for (i, v) in self.into_iter().enumerate() {
-            table.set(ctx, i64::try_from(i).unwrap() + 1, v).unwrap();
+        for (i, v) in (1..).zip(self) {
+            if !set_sequence_entry(ctx, table, i, v) {
+                break;
+            }
         }
         table.into()
     }
@@ -133,8 +160,10 @@ where
 {
     fn into_value(self, ctx: Context<'gc>) -> Value<'gc> {
         let table = Table::new(&ctx);
-        for (i, v) in self.iter().enumerate() {
-            table.set(ctx, i64::try_from(i).unwrap() + 1, v).unwrap();
+        for (i, v) in (1..).zip(self) {
+            if !set_sequence_entry(ctx, table, i, v) {
+                break;
+            }
         }
         table.into()
     }
@@ -146,8 +175,10 @@ where
 {
     fn into_value(self, ctx: Context<'gc>) -> Value<'gc> {
         let table = Table::new(&ctx);
-        for (i, v) in self.into_iter().enumerate() {
-            table.set(ctx, i64::try_from(i).unwrap() + 1, v).unwrap();
+        for (i, v) in (1..).zip(self) {
+            if !set_sequence_entry(ctx, table, i, v) {
+                break;
+            }
         }
         table.into()
     }
@@ -192,11 +223,7 @@ impl<'gc, T: FromValue<'gc>> FromValue<'gc> for Vec<T> {
 impl<'gc, T: FromValue<'gc>, const N: usize> FromValue<'gc> for [T; N] {
     fn from_value(ctx: Context<'gc>, value: Value<'gc>) -> Result<Self, TypeError> {
         if let Value::Table(table) = value {
-            let mut res: [Option<T>; N] = array::from_fn(|_| None);
-            for i in 0..N {
-                res[i] = Some(table.get(ctx, i64::try_from(i).unwrap() + 1)?);
-            }
-            Ok(res.map(|r| r.unwrap()))
+            try_array_from_fn(|i| T::from_value(ctx, table.get_value(ctx, i as i64 + 1)))
         } else {
             Err(TypeError {
                 expected: "sequence",
@@ -212,9 +239,13 @@ macro_rules! impl_int_from {
             impl<'gc> FromValue<'gc> for $i {
                 #[allow(irrefutable_let_patterns)]
                 fn from_value(
-                    _: Context<'gc>,
+                    ctx: Context<'gc>,
                     value: Value<'gc>,
                 ) -> Result<Self, TypeError> {
+                    // Converting a string takes time proportional to its length.
+                    if let Value::String(s) = value {
+                        ctx.charge_fuel(fuel_for(s.as_bytes().len(), cost::BYTES_PROCESSED));
+                    }
                     if let Some(i) = value.to_integer() {
                         if let Ok(i) = <$i>::try_from(i) {
                             Ok(i)
@@ -242,9 +273,13 @@ macro_rules! impl_float_from {
         $(
             impl<'gc> FromValue<'gc> for $f {
                 fn from_value(
-                    _: Context<'gc>,
+                    ctx: Context<'gc>,
                     value: Value<'gc>,
                 ) -> Result<Self, TypeError> {
+                    // Converting a string takes time proportional to its length.
+                    if let Value::String(s) = value {
+                        ctx.charge_fuel(fuel_for(s.as_bytes().len(), cost::BYTES_PROCESSED));
+                    }
                     if let Some(n) = value.to_number() {
                         Ok(n as $f)
                     } else {
@@ -483,12 +518,9 @@ impl<'gc, I: FromValue<'gc>, const N: usize> FromMultiValue<'gc> for Variadic<[I
         ctx: Context<'gc>,
         mut values: impl Iterator<Item = Value<'gc>>,
     ) -> Result<Self, TypeError> {
-        let mut res: [Option<I>; N] = array::from_fn(|_| None);
-        for i in 0..N {
-            res[i] = Some(I::from_value(ctx, values.next().unwrap_or(Value::Nil))?);
-        }
-
-        Ok(Self(res.map(|v| v.unwrap())))
+        Ok(Self(try_array_from_fn(|_| {
+            I::from_value(ctx, values.next().unwrap_or(Value::Nil))
+        })?))
     }
 }
 

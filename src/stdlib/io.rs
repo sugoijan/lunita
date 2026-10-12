@@ -6,12 +6,13 @@ use std::{
 use gc_arena::Collect;
 
 use crate::{
+    fuel::{cost, fuel_for},
     meta_ops::{self, MetaResult},
-    BoxSequence, Callback, CallbackReturn, Context, Error, Execution, Sequence, SequencePoll,
-    Stack, Value,
+    BoxSequence, Callback, CallbackReturn, Context, Error, Execution, LimitError, Sequence,
+    SequencePoll, Stack, Value,
 };
 
-pub fn load_io<'gc>(ctx: Context<'gc>) {
+pub fn load_io<'gc>(ctx: Context<'gc>) -> Result<(), LimitError> {
     ctx.set_global(
         "print",
         Callback::from_fn(&ctx, |ctx, _, mut stack| {
@@ -25,7 +26,7 @@ pub fn load_io<'gc>(ctx: Context<'gc>) {
                 fn poll(
                     mut self: Pin<&mut Self>,
                     ctx: Context<'gc>,
-                    _exec: Execution<'gc, '_>,
+                    mut exec: Execution<'gc, '_>,
                     mut stack: Stack<'gc, '_>,
                 ) -> Result<SequencePoll<'gc>, Error<'gc>> {
                     let mut stdout = io::stdout();
@@ -39,8 +40,13 @@ pub fn load_io<'gc>(ctx: Context<'gc>) {
                                     stdout.write_all(b"\t")?;
                                 }
                                 if let Value::String(s) = v {
+                                    exec.fuel().consume(fuel_for(
+                                        s.as_bytes().len(),
+                                        cost::BYTES_PROCESSED,
+                                    ));
                                     stdout.write_all(s.as_bytes())?;
                                 } else {
+                                    // DELIBERATE(puc): `print` takes any `__tostring` result (PUC requires a string; see COMPATIBILITY.md).
                                     write!(stdout, "{}", v.display())?;
                                 }
                             }
@@ -61,12 +67,13 @@ pub fn load_io<'gc>(ctx: Context<'gc>) {
                 }
             }
 
-            stack[..].reverse();
+            stack.as_mut_slice().reverse();
 
             Ok(CallbackReturn::Sequence(BoxSequence::new(
                 &ctx,
                 PrintSeq { first: true },
             )))
         }),
-    );
+    )?;
+    Ok(())
 }

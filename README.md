@@ -7,6 +7,14 @@
 
 **(After *four* years, now UN-paused!)**
 
+**This fork** hardens piccolo for running untrusted scripts inside a game: memory and string
+length limits, fuel in proportion to work, no panic reachable from a script, a Lua 5.1
+compatibility mode, and the complete `string` and `table` libraries. The
+[CHANGELOG](CHANGELOG.md) lists the changes and the API differences for hosts,
+[COMPATIBILITY.md](COMPATIBILITY.md) the differences from PUC-Rio Lua kept on purpose, and
+[docs/hardening-notes.md](docs/hardening-notes.md) the tests, harnesses, measurements and open
+decisions; the sections below are upstream's and predate the fork.
+
 Project Goals, in roughly descending priority:
   * Be an arguably working, useful Lua interpreter.
   * Be an easy way to *confidently* sandbox untrusted Lua scripts.

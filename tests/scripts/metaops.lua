@@ -169,18 +169,8 @@ do
     assert(cmp_array_recurse(a..b..c, { "concat", { "a" }, { "concat", { "b" }, { "c" } } }))
     assert(cmp_array_recurse((a..b)..c, { "concat", { "concat", { "a" }, { "b" } }, { "c" } }))
 
-    if string.sub(_VERSION, 1, 7) == "piccolo" then
-        assert(cmp_array_recurse(
-            table.concat({ a, b, c }),
-            { "concat", { "a" }, { "concat", { "b" }, { "c" } } }
-        ))
-
-        local sep = curse { "!" }
-        assert(cmp_array_recurse(
-            table.concat({ a, b, c }, sep),
-            { "concat", { "a" }, { "concat", { "!" }, { "concat", { "b" }, { "concat", { "!" }, { "c" } } } } }
-        ))
-    end
+    -- `table.concat` takes strings and numbers only, as in PUC-Rio Lua.
+    assert(not pcall(table.concat, { a, b, c }))
 
 end
 

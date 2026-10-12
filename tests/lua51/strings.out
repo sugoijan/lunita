@@ -1,0 +1,132 @@
+len
+0 3 3 3 4 3
+sub
+-10 "hello" "hel" "" "hell"
+-6 "hello" "hel" "" "hell"
+-5 "hello" "hel" "" "hell"
+-1 "o" "" "ello" ""
+0 "hello" "hel" "" "hell"
+1 "hello" "hel" "" "hell"
+2 "ello" "el" "e" "ell"
+5 "o" "" "ello" ""
+6 "" "" "ello" ""
+10 "" "" "ello" ""
+"" "" "" "" "" "el"
+"el" "23"
+upper lower reverse
+"HELLO WORLD 123" "hello world 123" "cba" ""
+"\000Aÿ" "Ã€Ã‰" "321"
+rep
+"ababab" "" "" "" "x" "xx"
+"555"
+byte char
+65 66 67 65 66 67
+nil nil nil 65
+65 nil nil nil
+"" "Hi" "\000ÿ" "AB"
+"error" "error" "error"
+find
+5 8 nil
+nil 1 12 11
+6 3 3 3
+1 2 2 2 2
+3 3 3 4 3 5
+1 nil 5 nil
+2 2 2 2 2
+match
+"world" nil "key" "value"
+"trim" "2024" "01" "15"
+3 "" "hello" ""
+"b" "c" nil
+classes
+"%a" 52
+"%c" 33
+"%d" 10
+"%l" 26
+"%p" 32
+"%s" 6
+"%u" 26
+"%w" 62
+"%x" 22
+"%z" 1
+"." 256
+"%A" 204
+"%D" 246
+"%S" 250
+"%W" 194
+"abc" "a" "]" "^"
+"abc" "---" "x-" nil
+"hello" "HELLO" "a1_"
+quantifiers
+"aaa" "aaa" "" "a" ""
+"a" "a><b" "ab" "b"
+"aaab" "xy" "123abc" "a" "b" "c"
+captures and back references
+"abc" nil "a"
+1 "h" "e" "l" "l" "o"
+"\"" "a" "b.c"
+balance and frontier
+"(a(b)c)" "()" "[[x]]" "aXb"
+1 "quick"
+"HELLO WORLD" 2
+"|aaa |bbb" "aaa| bbb|" 2
+gmatch
+one,two,three,
+a1;b2;c3;
+1 2 3 4 
+[abc][]
+[][][][][][]
+[][a][][]
+[^a][^a]
+gsub
+"hell0 w0rld" 2
+"hell0 world" 1
+"hello world" 0
+"hello world" 0
+"-h-e-l-l-o-" 6
+"--" 2
+"-a--c-" 4
+"<hello> <world>" 2
+"hello hello world world" 2
+"cba" 1
+"1Bc" "error"
+"xbc" 3
+"AbC" 3
+3 true "a%c" 1
+"axc" 97 120 0 99
+format %s with zeros
+1 5 1
+120 120 1
+101 102
+"a2b3c4" 3
+"1a2b3c4" 4
+"a%b" 1
+"axc" 1
+"Hello" "hello" "hellO" 1
+"x  " "a%b" 1
+"12x45" "abc" 4
+"ok" "error" "error"
+"ok" "error" "error"
+format
+"42 -42 3 -3"
+"   42|42   |00042|+42| 42|  -42"
+"007||  007|+7   "
+"42 10 ff FF 0xff 010 0XFF"
+"0 9007199254740992"
+"Lua" "    A|B    |"
+"1.234568e+04 1.230000E-04 1.00e+00 -1.500e+00 2.0e+00     |"
+"3.141590 2 0.3333333333    -3.14 3.14    | 00003.14 +1.0  1.000000"
+"100000 1e+06 0.0001 1e-05 1e+100 0.333333"
+"1.23e+03 0.3333333333 1.00000 1.00 1E-10 0"
+"inf -inf 1"
+"str 42 1.5" "   ab|ab   |ab|    a|"
+true 99
+"\"a \\\"quoted\\\"\\\\ string\\\
+with\\rcontrol\\000chars\""
+"\"0.33333333333333\"" "\"42\""
+"%d %" "error"
+"error"
+"error" "error" "error"
+"error" "error" "error"
+"error" "+5"
+"error"

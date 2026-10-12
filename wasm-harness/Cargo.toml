@@ -1,0 +1,21 @@
+[package]
+name = "piccolo-wasm-harness"
+version = "0.0.0"
+publish = false
+edition = "2021"
+description = "Runs the limit cases of tests/limits.rs in wasm32-unknown-unknown, driven by run.mjs"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+piccolo = { path = ".." }
+
+# Not part of piccolo's workspace.
+[workspace]
+members = ["."]
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1

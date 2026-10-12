@@ -7,7 +7,7 @@ use std::{
 use allocator_api2::boxed;
 use gc_arena::{allocator_api::MetricsAlloc, Collect, Gc, Mutation};
 
-use crate::{Context, Error, Execution, Function, Stack, Thread};
+use crate::{limits::Traced, Context, Error, Execution, Function, Stack, Thread};
 
 /// Describes the next action for an [`Executor`](crate::Executor) to take after a callback has
 /// returned.
@@ -32,8 +32,8 @@ pub enum CallbackReturn<'gc> {
     },
     /// Yield the values in the stack.
     ///
-    /// If no `to_thread` is given, then this yields values to the calling thread. If
-    /// this is the top thread in an `Executor`, then this will put the `Executor` in the
+    /// If no `to_thread` is given, then this yields values to the calling thread. If this is the
+    /// main (bottom) thread of an `Executor`, then this will put the `Executor` in the
     /// [`ExecutorMode::Result`](crate::ExecutorMode::Result) mode.
     ///
     /// If `to_thread` is given, then this yields to that thread rather than the caller. This has
@@ -167,6 +167,8 @@ impl<'gc> Callback<'gc> {
             root: R,
             #[collect(require_static)]
             call: F,
+            // Counts the callback for the memory limit's reserve if it may contain pointers.
+            queued: Option<Traced>,
         }
 
         impl<'gc, R, F> CallbackFn<'gc> for RootCallback<R, F>
@@ -190,7 +192,8 @@ impl<'gc> Callback<'gc> {
             }
         }
 
-        Callback::new(mc, RootCallback { root, call })
+        let queued = R::needs_trace().then(Traced::new);
+        Callback::new(mc, RootCallback { root, call, queued })
     }
 
     pub fn from_inner(inner: Gc<'gc, CallbackInner<'gc>>) -> Self {
@@ -239,8 +242,8 @@ impl<'gc> Hash for Callback<'gc> {
 /// These actions mirror the same ones that one-shot callbacks can perform with `CallbackReturn`,
 /// see [`CallbackReturn`] for more information.
 pub enum SequencePoll<'gc> {
-    /// `Sequence` is pending, `Sequence::poll` will be called on the next step with the stack
-    /// unchanged.
+    /// `Sequence` is pending, `Sequence::poll` will be called again, with the stack unchanged, on
+    /// the executor's next round (within the same step if fuel remains).
     Pending,
     /// Call the given functions with the arguments in the stack starting at `bottom`. When the
     /// function returns, `Sequence::poll` will be called with the return values placed into the

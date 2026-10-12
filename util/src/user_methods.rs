@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use gc_arena::{arena::Root, barrier, Collect, Rootable, Static};
 use piccolo::{
     Callback, CallbackReturn, Context, Error, Execution, FromMultiValue, IntoMultiValue,
-    MetaMethod, Table, UserData,
+    LimitError, MetaMethod, Table, UserData,
 };
 
 /// An easy way to wrap a value in [`UserData`] and let Lua call methods on it.
@@ -85,7 +85,12 @@ where
     /// arguments. If the wrong type is given as the first userdata parameter (either it is not a
     /// `UserData` or the downcast fails) or mismatched types are given for the `A` args type, then
     /// the method call will error.
-    pub fn add<F, A, R>(self, name: &'static str, ctx: Context<'gc>, method: F) -> bool
+    pub fn add<F, A, R>(
+        self,
+        name: &'static str,
+        ctx: Context<'gc>,
+        method: F,
+    ) -> Result<bool, LimitError>
     where
         F: Fn(&Root<'gc, U>, Context<'gc>, Execution<'gc, '_>, A) -> Result<R, Error<'gc>>
             + 'static,
@@ -101,18 +106,23 @@ where
             Ok(CallbackReturn::Return)
         });
 
-        !self.index.set_field(ctx, name, callback).is_nil()
+        Ok(!self.index.set_field(ctx, name, callback)?.is_nil())
     }
 
     /// A version of [`UserMethods::add`] that invokes a write barrier on the held userdata.
     ///
-    /// This method does the same thing as `UserData::add`, except the constructed callback will
+    /// This method does the same thing as [`UserMethods::add`], except the constructed callback will
     /// downcast the userdata with [`UserData::downcast_write`] and will pass a `[barrier::Write]`
     /// wrapper to `method`.
     ///
     /// This is useful if the added method needs to safely use interior mutability in the wrapped
     /// userdata.
-    pub fn add_write<F, A, R>(self, name: &'static str, ctx: Context<'gc>, method: F) -> bool
+    pub fn add_write<F, A, R>(
+        self,
+        name: &'static str,
+        ctx: Context<'gc>,
+        method: F,
+    ) -> Result<bool, LimitError>
     where
         F: Fn(
                 &barrier::Write<Root<'gc, U>>,
@@ -133,7 +143,7 @@ where
             Ok(CallbackReturn::Return)
         });
 
-        !self.index.set_field(ctx, name, callback).is_nil()
+        Ok(!self.index.set_field(ctx, name, callback)?.is_nil())
     }
 }
 
@@ -180,7 +190,12 @@ impl<'gc, U: 'static> StaticUserMethods<'gc, U> {
     }
 
     /// Add a method to the inner metatable.
-    pub fn add<F, A, R>(self, name: &'static str, ctx: Context<'gc>, method: F) -> bool
+    pub fn add<F, A, R>(
+        self,
+        name: &'static str,
+        ctx: Context<'gc>,
+        method: F,
+    ) -> Result<bool, LimitError>
     where
         F: Fn(&U, Context<'gc>, Execution<'gc, '_>, A) -> Result<R, Error<'gc>> + 'static,
         A: FromMultiValue<'gc>,

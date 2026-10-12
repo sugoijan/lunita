@@ -2,10 +2,19 @@ use std::rc::Rc;
 
 use ahash::HashSet;
 
+use crate::hash::HashKeys;
+
 pub trait StringInterner {
     type String: AsRef<[u8]> + Clone;
 
     fn intern(&mut self, s: &[u8]) -> Self::String;
+
+    /// The keys the compiler hashes constants with: those of the instance the chunk is compiled
+    /// for, so that a chunk cannot be made of constants whose hashes collide (see
+    /// [`crate::hash`]).
+    fn hash_keys(&self) -> HashKeys {
+        HashKeys::default()
+    }
 }
 
 impl<'a, S: StringInterner> StringInterner for &'a mut S {
@@ -14,10 +23,19 @@ impl<'a, S: StringInterner> StringInterner for &'a mut S {
     fn intern(&mut self, s: &[u8]) -> Self::String {
         S::intern(self, s)
     }
+
+    fn hash_keys(&self) -> HashKeys {
+        S::hash_keys(self)
+    }
 }
 
-#[derive(Default)]
 pub struct BasicInterner(HashSet<Rc<[u8]>>);
+
+impl Default for BasicInterner {
+    fn default() -> Self {
+        BasicInterner(HashSet::with_hasher(ahash::RandomState::new()))
+    }
+}
 
 impl StringInterner for BasicInterner {
     type String = Rc<[u8]>;

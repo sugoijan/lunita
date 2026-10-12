@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use super::{
     lexer::{LexError, Lexer, LineNumber, Token},
-    StringInterner,
+    BudgetError, CompileBudget, StringInterner,
 };
 
 #[derive(Debug, Clone)]
@@ -333,10 +333,12 @@ pub enum ParseErrorKind {
     ExpressionNotStatement,
     #[error("recursion limit reached")]
     RecursionLimit,
-    #[error("lexer error")]
+    #[error("{0}")]
     LexError(#[from] LexError),
     #[error("invalid attribute {0:?}")]
     InvalidAttribute(String),
+    #[error("{0}")]
+    Budget(BudgetError),
 }
 
 #[derive(Debug, Error)]
@@ -350,21 +352,69 @@ pub fn parse_chunk<S>(source: &[u8], interner: S) -> Result<Chunk<S::String>, Pa
 where
     S: StringInterner,
 {
+    parse_chunk_with_budget(source, interner, &CompileBudget::default())
+}
+
+// A token in an error message, cut to 256 bytes: a script may make them as long as a string.
+fn describe_token<S: AsRef<[u8]>>(token: &Token<S>) -> String {
+    let mut text = format!("{token:?}");
+    if text.len() > 256 {
+        let mut end = 256;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+        text.push_str("...");
+    }
+    text
+}
+
+// The parse error of a lexer error: the budget's is reported as the budget's.
+fn lex_error_kind(error: LexError) -> ParseErrorKind {
+    match error {
+        LexError::Budget(error) => ParseErrorKind::Budget(error),
+        error => ParseErrorKind::LexError(error),
+    }
+}
+
+/// Parse a chunk, charging the memory and work it uses to `budget`.
+pub fn parse_chunk_with_budget<S>(
+    source: &[u8],
+    interner: S,
+    budget: &CompileBudget,
+) -> Result<Chunk<S::String>, ParseError>
+where
+    S: StringInterner,
+{
+    // Reading the source is work too (see `CompileBudget::SOURCE_BYTES_PER_WORK`), charged before
+    // reading any of it.
+    budget
+        .charge_work((source.len() / CompileBudget::SOURCE_BYTES_PER_WORK) as u64)
+        .map_err(|e| ParseError {
+            kind: ParseErrorKind::Budget(e),
+            line_number: LineNumber(0),
+        })?;
+
+    let mut lexer = Lexer::new(source, interner);
+    lexer.set_max_string_len(budget.limits().string_len);
+    lexer.set_budget(budget);
     Parser {
-        lexer: Lexer::new(source, interner),
+        lexer,
         read_buffer: Vec::new(),
         recursion_guard: Rc::new(()),
+        budget,
     }
     .parse_chunk()
 }
 
-struct Parser<'a, S: StringInterner> {
+struct Parser<'a, 'b, S: StringInterner> {
     lexer: Lexer<'a, S>,
     read_buffer: Vec<LineAnnotated<Token<S::String>>>,
     recursion_guard: Rc<()>,
+    budget: &'b CompileBudget,
 }
 
-impl<S: StringInterner> Parser<'_, S> {
+impl<S: StringInterner> Parser<'_, '_, S> {
     fn parse_chunk(&mut self) -> Result<Chunk<S::String>, ParseError> {
         let block = self.parse_block()?;
         if !self.look_ahead(0)?.is_none() {
@@ -567,7 +617,7 @@ impl<S: StringInterner> Parser<'_, S> {
 
             token => Err(ParseError {
                 kind: ParseErrorKind::Unexpected {
-                    unexpected: format!("{:?}", token),
+                    unexpected: describe_token(token),
                     expected: "'=' or 'in'".to_owned(),
                 },
                 line_number: next.line_number,
@@ -589,9 +639,13 @@ impl<S: StringInterner> Parser<'_, S> {
         let name = self.expect_name()?.inner;
         let mut fields = Vec::new();
         let mut method = None;
+        // The compiler turns the function name into a chain of table accesses, so each field counts
+        // as a level of recursion.
+        let mut field_guards = Vec::new();
         loop {
             match self.look_ahead(0)?.map(AsRef::as_ref) {
                 Some(&Token::Dot) => {
+                    field_guards.push(self.recursion_guard()?);
                     self.take_next()?;
                     fields.push(self.expect_name()?.inner);
                 }
@@ -782,12 +836,16 @@ impl<S: StringInterner> Parser<'_, S> {
         };
 
         let mut tail = Vec::new();
+        // The compiler turns a chain of left-associative operators into a tree as deep as the
+        // chain is long, so each operator in the chain counts as a level of recursion.
+        let mut tail_guards = Vec::new();
         while let Some(binary_op) = self.look_ahead(0)?.and_then(|t| get_binary_operator(t)) {
             let (left_priority, right_priority) = binary_priority(binary_op);
             if left_priority <= priority_limit {
                 break;
             }
 
+            tail_guards.push(self.recursion_guard()?);
             self.take_next()?;
             let right_expression = self.parse_sub_expression(right_priority)?;
             tail.push((binary_op, right_expression));
@@ -846,7 +904,7 @@ impl<S: StringInterner> Parser<'_, S> {
             Token::Name(n) => Ok(PrimaryExpression::Name(n)),
             token => Err(ParseError {
                 kind: ParseErrorKind::Unexpected {
-                    unexpected: format!("{:?}", token),
+                    unexpected: describe_token(&token),
                     expected: "grouped expression or name".to_owned(),
                 },
                 line_number: next.line_number,
@@ -869,7 +927,7 @@ impl<S: StringInterner> Parser<'_, S> {
             }
             token => Err(ParseError {
                 kind: ParseErrorKind::Unexpected {
-                    unexpected: format!("{:?}", token),
+                    unexpected: describe_token(token),
                     expected: "field or suffix".to_owned(),
                 },
                 line_number: next.line_number,
@@ -913,7 +971,7 @@ impl<S: StringInterner> Parser<'_, S> {
             token => {
                 return Err(ParseError {
                     kind: ParseErrorKind::Unexpected {
-                        unexpected: format!("{:?}", token),
+                        unexpected: describe_token(token),
                         expected: "function arguments".to_owned(),
                     },
                     line_number: next.line_number,
@@ -937,7 +995,7 @@ impl<S: StringInterner> Parser<'_, S> {
             }
             token => Err(ParseError {
                 kind: ParseErrorKind::Unexpected {
-                    unexpected: format!("{:?}", token),
+                    unexpected: describe_token(token),
                     expected: "expression suffix".to_owned(),
                 },
                 line_number: next.line_number,
@@ -948,6 +1006,9 @@ impl<S: StringInterner> Parser<'_, S> {
     fn parse_suffixed_expression(&mut self) -> Result<SuffixedExpression<S::String>, ParseError> {
         let primary = self.parse_primary_expression()?;
         let mut suffixes = Vec::new();
+        // The compiler turns a chain of suffixes into a tree as deep as the chain is long, so each
+        // suffix counts as a level of recursion.
+        let mut suffix_guards = Vec::new();
         loop {
             match self.look_ahead(0)?.map(AsRef::as_ref) {
                 Some(&Token::Dot)
@@ -956,6 +1017,7 @@ impl<S: StringInterner> Parser<'_, S> {
                 | Some(&Token::LeftParen)
                 | Some(&Token::LeftBrace)
                 | Some(&Token::String(_)) => {
+                    suffix_guards.push(self.recursion_guard()?);
                     suffixes.push(self.parse_suffix_part()?);
                 }
                 _ => break,
@@ -982,7 +1044,7 @@ impl<S: StringInterner> Parser<'_, S> {
                     token => {
                         return Err(ParseError {
                             kind: ParseErrorKind::Unexpected {
-                                unexpected: format!("{:?}", token),
+                                unexpected: describe_token(&token),
                                 expected: "parameter name or '...'".to_owned(),
                             },
                             line_number: next.line_number,
@@ -1051,8 +1113,8 @@ impl<S: StringInterner> Parser<'_, S> {
         })
     }
 
-    // Error if we have more than MAX_RECURSION guards live, otherwise return a new recursion guard
-    // (a recursion guard is just an Rc used solely for its live count).
+    // Error if MAX_RECURSION - 1 guards are live (the count includes the parser's own `Rc`),
+    // otherwise return a new recursion guard (an `Rc` used solely for its live count).
     fn recursion_guard(&self) -> Result<Rc<()>, ParseError> {
         if Rc::strong_count(&self.recursion_guard) < MAX_RECURSION {
             Ok(self.recursion_guard.clone())
@@ -1094,7 +1156,7 @@ impl<S: StringInterner> Parser<'_, S> {
             } else {
                 Err(ParseError {
                     kind: ParseErrorKind::Unexpected {
-                        unexpected: format!("{:?}", next_token.inner),
+                        unexpected: describe_token(&next_token.inner),
                         expected: format!("{:?}", token),
                     },
                     line_number: next_token.line_number,
@@ -1118,7 +1180,7 @@ impl<S: StringInterner> Parser<'_, S> {
                 Token::Name(name) => Ok(name),
                 token => Err(ParseError {
                     kind: ParseErrorKind::Unexpected {
-                        unexpected: format!("{:?}", token),
+                        unexpected: describe_token(&token),
                         expected: "name".to_owned(),
                     },
                     line_number: self.lexer.line_number(),
@@ -1142,7 +1204,7 @@ impl<S: StringInterner> Parser<'_, S> {
                 Token::String(string) => Ok(string),
                 token => Err(ParseError {
                     kind: ParseErrorKind::Unexpected {
-                        unexpected: format!("{:?}", token),
+                        unexpected: describe_token(&token),
                         expected: "string".to_owned(),
                     },
                     line_number: self.lexer.line_number(),
@@ -1176,7 +1238,7 @@ impl<S: StringInterner> Parser<'_, S> {
     // Return true if the nth token ahead in the stream matches the given token. If this would read
     // past the end of the stream, this will simply return false.
     fn check_ahead(&mut self, n: usize, token: Token<S::String>) -> Result<bool, ParseError> {
-        self.read_ahead(n)?;
+        self.read_ahead(n + 1)?;
         Ok(if let Some(t) = self.read_buffer.get(n) {
             **t == token
         } else {
@@ -1184,19 +1246,27 @@ impl<S: StringInterner> Parser<'_, S> {
         })
     }
 
-    // Read at least `n` tokens ahead in the stream, filling the read buffer up to size `n` (if
-    // possible).
+    // Fill the read buffer up to `n` tokens (fewer at the end of the stream), lexing no further:
+    // an error in a token past the ones needed is reported only when it is reached.
     fn read_ahead(&mut self, n: usize) -> Result<(), ParseError> {
-        while self.read_buffer.len() <= n {
+        while self.read_buffer.len() < n {
             self.lexer.skip_whitespace().map_err(|e| ParseError {
-                kind: ParseErrorKind::LexError(e),
+                kind: lex_error_kind(e),
                 line_number: self.lexer.line_number(),
             })?;
             let line_number = self.lexer.line_number();
             if let Some(token) = self.lexer.read_token().map_err(|e| ParseError {
-                kind: ParseErrorKind::LexError(e),
+                kind: lex_error_kind(e),
                 line_number: self.lexer.line_number(),
             })? {
+                // The bytes of a string or name were charged by the lexer, before interning them.
+                self.budget
+                    .charge_memory(CompileBudget::BYTES_PER_TOKEN)
+                    .and_then(|()| self.budget.charge_work(1))
+                    .map_err(|e| ParseError {
+                        kind: ParseErrorKind::Budget(e),
+                        line_number,
+                    })?;
                 self.read_buffer
                     .push(LineAnnotated::new(line_number, token));
             } else {

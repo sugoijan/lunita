@@ -23,6 +23,10 @@ impl Default for RegisterAllocator {
     }
 }
 
+#[expect(
+    clippy::indexing_slicing,
+    reason = "every index into `registers` is a register index, which is below 256"
+)]
 impl RegisterAllocator {
     /// Returns the index immediately after the largest used register index
     pub fn stack_top(&self) -> u16 {
@@ -63,10 +67,10 @@ impl RegisterAllocator {
 
     /// Free a single register.
     pub fn free(&mut self, register: RegisterIndex) {
-        assert!(
-            self.registers[register.0 as usize],
-            "cannot free unallocated register",
-        );
+        if !self.registers[register.0 as usize] {
+            debug_assert!(false, "cannot free unallocated register");
+            return;
+        }
         if register.0 as u16 + 1 == self.stack_top {
             self.pop_to(register.0 as u16);
         } else {
@@ -82,8 +86,10 @@ impl RegisterAllocator {
         if size == 0 {
             None
         } else if size as u16 <= 256 - self.stack_top {
-            let rbegin = self.stack_top as u8;
-            for i in rbegin..rbegin + size {
+            // `stack_top <= 255` here since `size > 0`, but `stack_top + size` may be 256, so this
+            // must not be computed in `u8`.
+            let rbegin = self.stack_top;
+            for i in rbegin..rbegin + size as u16 {
                 self.registers[i as usize] = true;
             }
             if self.first_free == self.stack_top {
@@ -91,14 +97,15 @@ impl RegisterAllocator {
             }
             self.stack_top += size as u16;
             self.stack_size = self.stack_size.max(self.stack_top);
-            Some(RegisterIndex(rbegin))
+            Some(RegisterIndex(rbegin as u8))
         } else {
             None
         }
     }
 
     /// Free all registers past the given register, making the given register the new top of the
-    /// stack. If the given register is >= to the current top, this will have no effect.
+    /// stack, or a lower one if the registers below it are free too. If the given register is >= to
+    /// the current top, this will have no effect.
     pub fn pop_to(&mut self, new_top: u16) {
         if self.stack_top > new_top {
             for i in new_top..self.stack_top {
@@ -113,5 +120,22 @@ impl RegisterAllocator {
                 self.stack_top = i;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn push_to_last_register() {
+        let mut allocator = RegisterAllocator::default();
+        assert_eq!(allocator.push(255).map(|r| r.0), Some(0));
+        assert_eq!(allocator.push(1).map(|r| r.0), Some(255));
+        assert_eq!(allocator.stack_top(), 256);
+        assert!(allocator.push(1).is_none());
+        assert!(allocator.allocate().is_none());
+        allocator.free(RegisterIndex(255));
+        assert_eq!(allocator.stack_top(), 255);
     }
 }

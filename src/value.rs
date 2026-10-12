@@ -1,4 +1,4 @@
-use std::{f64, fmt, i64};
+use std::fmt;
 
 use gc_arena::{Collect, Gc};
 
@@ -52,6 +52,8 @@ impl<'gc> Value<'gc> {
     /// [`Value::Table`]s, [`Value::Function`]s, [`Value::Thread`]s, and [`Value::UserData`]
     /// are all printed as `"<typename {:p}>"`, where 'typename' is the value returned by
     /// [`Value::type_name`].
+    // DELIBERATE(puc): `tostring` of tables, functions and threads has this format (PUC's is
+    // `table: 0x...`) and ignores `__name` (see COMPATIBILITY.md).
     pub fn display(self) -> impl fmt::Display + 'gc {
         struct ValueDisplay<'gc>(Value<'gc>);
 
@@ -150,15 +152,18 @@ impl<'gc> Value<'gc> {
 
     /// Interprets Numbers, Integers, and Strings as a String, otherwise returns None.
     ///
-    /// If the value is a [`Value::String`], the string is returned directly. Otherwise, the
-    /// returned string will always be the same as what [`Value::display`] would display.
+    /// If the value is a [`Value::String`], the string is returned directly. Numbers are converted
+    /// as `tostring` converts them, which depends on [`Context::compat`](crate::Context::compat)
+    /// (and differs from [`Value::display`], which keeps Rust's formatting).
     pub fn into_string(self, ctx: crate::Context<'gc>) -> Option<String<'gc>> {
+        let mut buf = Vec::new();
         match self {
-            Value::Integer(i) => Some(ctx.intern(i.to_string().as_bytes())),
-            Value::Number(n) => Some(ctx.intern(n.to_string().as_bytes())),
-            Value::String(s) => Some(s),
-            _ => None,
+            Value::Integer(i) => crate::compat::write_integer(&mut buf, ctx.compat(), i),
+            Value::Number(n) => crate::compat::write_float(&mut buf, ctx.compat(), n),
+            Value::String(s) => return Some(s),
+            _ => return None,
         }
+        Some(ctx.intern(&buf))
     }
 
     /// Indicates whether the value can be implicitly converted to a [`String`]; if so,
@@ -271,7 +276,7 @@ mod tests {
         let mut lua = Lua::core();
         lua.enter(|ctx| {
             let table = Table::new(&ctx);
-            table.set_field(ctx, "a", table);
+            table.set_field(ctx, "a", table).unwrap();
             println!("{:?}", table);
 
             let table2 = Table::new(&ctx);
@@ -279,7 +284,7 @@ mod tests {
             println!("{:?}", table2);
 
             let combined = Table::new(&ctx);
-            combined.set_field(ctx, "a", combined);
+            combined.set_field(ctx, "a", combined).unwrap();
             combined.set_metatable(&ctx, Some(combined));
             println!("{:?}", combined);
 

@@ -16,12 +16,12 @@ license = "MIT"
 repository = "https://github.com/kyren/piccolo"
 
 [workspace.dependencies]
-ahash = "0.8"
+# Without `runtime-rng`, which needs `getrandom` (and JS imports on wasm32-unknown-unknown).
+ahash = { version = "0.8", default-features = false, features = ["std"] }
 allocator-api2 = "0.2"
 anyhow = "1.0"
 gc-arena = { git = "https://github.com/kyren/gc-arena", rev = "5a7534b883b703f23cfb8c3cfdf033460aa77ea9", features = ["allocator-api2", "hashbrown"] }
 hashbrown = { version = "0.14", features = ["raw"] }
-rand = { version = "0.8", features = ["small_rng"] }
 serde = "1.0"
 thiserror = "1.0"
 
@@ -43,9 +43,10 @@ allocator-api2.workspace = true
 anyhow.workspace = true
 gc-arena.workspace = true
 hashbrown.workspace = true
-rand.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 clap = { version = "4.5", features = ["cargo"] }
+cpu-time = "1.0"
+peak_alloc = "0.3"
 rustyline = "14.0"

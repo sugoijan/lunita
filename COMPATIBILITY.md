@@ -1,3 +1,9 @@
+**This fork** hardens piccolo for untrusted scripts (see the README and the CHANGELOG). The rows
+below were updated where it changed them: the whole `string` library, `load`, `xpcall`,
+`rawequal`, `error` levels and the three-value iterators are implemented. The Lua 5.1 mode is
+documented on `Compat::Lua51`; [Differences kept on purpose](#differences-kept-on-purpose), at the
+end, lists where the fork departs from PUC-Rio Lua in both modes and in that one.
+
 - ⚫️️ = unimplemented
 - 🟡 = differing
 - 🔵 = implemented
@@ -32,18 +38,18 @@ likely not be implemented due to differences between piccolo and PUC-Lua.
 | 🤷‍♀️     | `collectgarbage("incremental"[, gcpause, stepmult, stepsize])` |                                                                                                                                        |       |
 | 🤷‍♀️     | `collectgarbage("generational"[, minormult, majormult])`       |                                                                                                                                        |       |
 | ⚫️    | `dofile([filename])`                                           |                                                                                                                                        |       |
-| 🟡     | `error(message)`                                               | Due to `level` not being implemented for, all calls here give the same result as PUC-Lua `error(message, 0)` (or any invalid `level`). |       |
-| ⚫️    | `error(message, level)`                                        |                                                                                                                                        |       |
+| 🔵     | `error(message)`                                               |                                                                                                                                        |       |
+| 🔵     | `error(message, level)`                                        |                                                                                                                                        |       |
 | ⚫️    | `_G` (value)                                                   |                                                                                                                                        |       |
 | 🔵     | `getmetatable(object)`                                         |                                                                                                                                        |       |
-| 🟡     | `ipairs(t)`                                                    | PUC-Lua returns `iter, table, 0`, where as piccolo returns `iter, table`.                                                              |       |
-| ⚫️    | `load(chunk[, chunkname, mode, env])`                          |                                                                                                                                        |       |
+| 🔵     | `ipairs(t)`                                                    |                                                                                                                                        |       |
+| 🔵     | `load(chunk[, chunkname, mode, env])`                          | Compiles at most `LOAD_MAX_WORK` units of compiler work, past which it returns `nil, "chunk is too complex to compile"`.                  |       |
 | ⚫️    | `loadfile([filename, mode, env])`                              |                                                                                                                                        |       |
 | 🔵     | `next(table [, index])`                                        |                                                                                                                                        |       |
-| 🔵     | `pairs(t)`                                                     | By default, PUC-Lua return `iter, table, nil` where as piccolo returns `iter, table`.                                                  |       |
+| 🔵     | `pairs(t)`                                                     |                                                                                                                                        |       |
 | 🔵     | `pcall(f, args...)`                                            |                                                                                                                                        |       |
 | 🔵     | `print(args...)`                                               |                                                                                                                                        |       |
-| ⚫️    | `rawequal(v1, v2)`                                             |                                                                                                                                        |       |
+| 🔵     | `rawequal(v1, v2)`                                             |                                                                                                                                        |       |
 | 🔵     | `rawget(table, index)`                                         |                                                                                                                                        |       |
 | 🔵    | `rawlen(v)`                                                    |                                                                                                                                        |       |
 | 🔵     | `rawset(table, index, value)`                                  |                                                                                                                                        |       |
@@ -54,7 +60,7 @@ likely not be implemented due to differences between piccolo and PUC-Lua.
 | 🔵     | `type(v)`                                                      |                                                                                                                                        |       |
 | 🔵    | `_VERSION` (value)                                             |                                                                                                                                        |       |
 | ⚫️    | `warn(msg, args...)`                                           |                                                                                                                                        |       |
-| ⚫️    | `xpcall(f, msgh, args...)`                                     |                                                                                                                                        |       |
+| 🔵     | `xpcall(f, msgh, args...)`                                     |                                                                                                                                        |       |
 
 [^0]: Hedging b/c I don't know PUC-Lua like my reverse palm, and there might be differing behaviors if you poke both implementations to death, but that's not what this document is for.
 
@@ -92,16 +98,16 @@ likely not be implemented due to differences between piccolo and PUC-Lua.
 | 🔵   | `byte(s[, i, j])`                 |             |       |
 | 🔵   | `char(args...)`                   |             |       |
 | ⚫️️   | `dump(function[, strip])`         |             |       |
-| ⚫️️   | `find(s, pattern[, init, plain])` |             |       |
-| ⚫️️   | `format(formatstring, args...)`   |             |       |
-| ⚫️️   | `gmatch(s, pattern[, init])`      |             |       |
-| ⚫️️   | `gsub(s, pattern, repl[, n])`     |             |       |
+| 🔵     | `find(s, pattern[, init, plain])` | A match attempt fails with "pattern too complex" past 10^5 matcher steps or 200 nested calls (PUC has no step cap). |       |
+| 🔵     | `format(formatstring, args...)`   | `%a` is formatted by piccolo (glibc's style); see the end of this file. |       |
+| 🔵     | `gmatch(s, pattern[, init])`      | Same step cap as `find`. |       |
+| 🔵     | `gsub(s, pattern, repl[, n])`     | Same step cap as `find`. |       |
 | 🔵     | `len(s)`                          |             |       |
 | 🔵   | `lower(s)`                        |             |       |
-| ⚫️️   | `match(s, pattern[, init])`       |             |       |
+| 🔵     | `match(s, pattern[, init])`       | Same step cap as `find`. |       |
 | ⚫️️   | `pack(fmt, values...)`            |             |       |
 | ⚫️️   | `packsize(fmt)`                   |             |       |
-| ⚫️️   | `rep(s, n[, sep])`                |             |       |
+| 🔵     | `rep(s, n[, sep])`                |             |       |
 | 🔵   | `reverse(s)`                      |             |       |
 | 🔵   | `sub(s, i[, j])`                  |             |       |
 | ⚫️️   | `unpack(fmt, s[, pos])`           |             |       |
@@ -122,7 +128,7 @@ likely not be implemented due to differences between piccolo and PUC-Lua.
 
 | Status | Function                     | Differences | Notes |
 | ------ | ---------------------------- | ----------- | ----- |
-| 🔵     | `concat(list[, sep, i, j])`  |             | Supports the `__concat` metamethod |
+| 🔵     | `concat(list[, sep, i, j])`  |             | Strings and numbers only, as PUC-Rio Lua; errors instead of wrapping around at `maxinteger` |
 | 🔵     | `insert(list, [pos,] value)` |             |       |
 | 🔵     | `move(a1, f, e, t[, a2])`    |             | Currently implemented with a Lua polyfill |
 | 🔵     | `pack(args...)`              |             |       |
@@ -155,7 +161,7 @@ I'm not going over these with a fine-tooth comb, if it exists (and takes the spe
 | 🔵     | `modf(x)`            |             |       |
 | 🔵     | `pi` (value)         |             |       |
 | 🔵     | `rad(x)`             |             |       |
-| 🔵     | `random([m, n])`     |             |       |
+| 🔵     | `random([m, n])`     |             | PUC 5.4's xoshiro256**, seeded by `Lua::set_random_seed` (0 by default) |
 | 🔵     | `randomseed([x, y])` |             |       |
 | 🔵     | `sin(x)`             |             |       |
 | 🔵     | `sqrt(x)`            |             |       |
@@ -230,3 +236,75 @@ implemented nor are there plans to implement due to differences between the impl
 | ⚫️    | `traceback([thread,][message, level])`    |                                                                                                                                                                                                           |       |
 | ⚫️    | `upvalueid(f, n)`                         |                                                                                                                                                                                                           |       |
 | ⚫️    | `upvaluejoin(f1, n1, f2, n2)`             |                                                                                                                                                                                                           |       |
+
+## Differences kept on purpose
+
+With `Compat::Lua51`, against PUC 5.1.5 (results and messages):
+
+- **Integers.** piccolo has 64-bit integers in both modes. In 5.1 mode, literals and arithmetic
+  keep them within 2^53, where they are exactly the floats 5.1 holds, but hex literals from
+  2^63 wrap (`0xffffffffffffffff` is -1, 1.8446744073709552e19 in 5.1), `math.maxinteger`,
+  `math.mininteger`, `math.tointeger`, `math.type` and `math.ult` exist, the 5.4 bitwise
+  operators give any integer, and an integer `for` loop counts past 2^53 exactly (5.1 stalls
+  there).
+- **Syntax.** piccolo accepts Lua 5.4 syntax in both modes (`//`, bitwise operators, `goto`,
+  `<const>`, integer literals); 5.1 rejects it.
+- **-0 constants.** PUC 5.1 merges the constants 0 and -0 within a function, so a `-0` (or a
+  folded `0 * -1`) after a `0` in the same function is 0, and a `0` after a `-0` is -0; piccolo
+  keeps each sign.
+- **`load`** accepts strings in 5.1 mode (5.1's only takes functions); the host is expected to add
+  `loadstring`.
+- **Pattern recursion** is capped at 200 levels in 5.1 mode too (5.1 has no cap and overflows the
+  C stack).
+- **`%a`** in `string.format` is formatted by piccolo in glibc's style (subnormals with a zero
+  leading digit and `p-1022`, a precision rounding to nearest, ties to even on the last digit
+  kept, without renormalizing); Apple's libc prints subnormals normalized and rounds ties
+  differently, so the C libraries differ there too.
+- **`math.random`** is xoshiro256**, not the C library's `rand`.
+- **Chunk names** in syntax errors are shown as run-time positions show them (60 bytes,
+  `luaO_chunkid`), where 5.1's lexer keeps up to 80 bytes; `tonumber` follows C99's `strtod` for
+  `nan(...)` (Apple's libc takes any characters up to the `)`).
+
+In both modes, against PUC 5.1.5 and 5.4.9:
+
+- **Runtime errors of the VM** (indexing nil, arithmetic or concatenation on bad types, calling a
+  non-function, comparing incompatible values) are piccolo's `RuntimeError`s: `pcall` returns them
+  as a userdata whose `tostring` is the error with its causes ("operator error: ..."), without a
+  position or PUC's wording ("attempt to index local 'x' (a nil value)"). This is piccolo's design
+  and the largest visible difference left; making them positioned strings is a possible next
+  change.
+- **Library error messages** name the function as piccolo registered it ('floor'), where PUC names
+  a function called from `pcall` or as a metamethod '?', 5.4 qualifies it ('math.floor'), and both
+  count arguments from `self` in method calls (`("x"):rep({})` is argument #2 in piccolo, #1 in
+  PUC).
+- **Missing library pieces** (the host adds what it needs): `_G`, `coroutine.wrap`,
+  `coroutine.isyieldable`, `coroutine.close`, `collectgarbage` options other than "count", the
+  `os`, `io` (beyond `print`), `debug`, `utf8` and `package` libraries, and the 5.1 aliases
+  (`unpack`, `loadstring`, `table.getn`, `math.mod`, `math.pow`, `string.gfind`, ...).
+- **Pattern matching** fails with "pattern too complex" past 10^5 matcher steps in one match
+  attempt (an attempt runs within one step, and this keeps it to 1.1–1.4 ms in wasm):
+  `string.find(("a"):rep(300000), "^a*.?b$")`, from PUC's `pm.lua`, needs more and errors where
+  PUC returns nil, as does a backtracking pattern like `("a*"):rep(30) .. "b"` on 30 `a`s.
+- **Long strings are interned** like short ones, so equal strings are the same object: `%p` of two
+  equal long strings is the same (PUC's `pm.lua` and `strings.lua` expect them to differ).
+- **Table iteration** follows insertion order (deterministic on every platform); PUC's follows
+  its hash layout. `#t` on tables with holes may find a different border.
+- **`tostring`** of tables, functions and threads has piccolo's format (`<table 0x...>`, PUC's is
+  `table: 0x...`) and ignores `__name`; `print` and `string.format` take any `__tostring` result
+  (`tostring` itself checks it as each version does).
+- **Default mode against 5.4.9** (piccolo's choice, kept so far): inserting into a table whose
+  length is `maxinteger` errors where PUC wraps.
+- **Not implemented from PUC**: the string metatable is consulted for `__index` only (PUC consults
+  it for every event, 5.4 implements string arithmetic through it); `coroutine.yield` from the
+  main chunk suspends the executor and its values become the chunk's result, where PUC raises
+  "attempt to yield from outside a coroutine" (piccolo's design, which a host may use);
+  `table.move` and `table.sort` are Lua code reading `math`, `type` and `error` from the globals
+  at call time, with their own error positions and no comparator validation; `load` with a reader
+  function lets the reader's errors propagate and names the chunk after its text; `next(t, 1.0)`
+  with a float key is accepted (5.4 raises); NaN is formatted with its sign ("-nan", as glibc)
+  where Apple's libc prints "nan"; PUC's limit of 200 nested C calls (nested `pcall`s) has no
+  equivalent beyond the frame cap.
+
+Each of these is marked where it lives in the code with a comment holding `DELIBERATE(puc)` and a
+pointer here, so that a reviewer does not report it (`grep -rn 'DELIBERATE(' src` lists them;
+`DELIBERATE(cost)` marks the cost-model choices documented on `piccolo::fuel::cost`).

@@ -1,0 +1,204 @@
+C1 host_stop 17
+while true do end
+C2 host_stop 57
+while true do pcall(function() while true do end end) end
+C3 host_stop 82
+local co = coroutine.create(function() while true do end end) coroutine.resume(co)
+C4 host_stop,error,limit 121
+local mt = {} mt.__tostring = function(t) return tostring(setmetatable({}, mt)) end print(tostring(setmetatable({}, mt)))
+C5 error,limit 41
+local function f() return 1 + f() end f()
+C6 error,limit 51
+local function f(n) return pcall(f, n + 1) end f(1)
+C7 error,limit 64
+local function f() coroutine.resume(coroutine.create(f)) end f()
+C8a error,limit 98
+local t = setmetatable({}, {}) getmetatable(t).__index = function(t, k) return t[k] end return t.x
+C8b error,limit 107
+local mt = {} mt.__concat = function(a, b) return a .. b end local t = setmetatable({}, mt) return t .. 'x'
+C9a ok,host_stop 76
+local t = {} for i = 1, 1e6 do t[i] = (i * 7919) % 1000003 end table.sort(t)
+C9b ok,error 85
+local t = {} for i = 1, 100 do t[i] = i end table.sort(t, function() return true end)
+C9c error 73
+local t = {3, 1, 2} table.sort(t, function(a, b) error('comparator') end)
+C10 host_stop,ok 101
+local t = {} for i = 1, 1e6 do t[i] = i end while true do local n = #t for k, v in next, t do end end
+C11a host_stop,error 49
+string.find(('a'):rep(30), ('a*'):rep(30) .. 'b')
+C11b host_stop,error 50
+string.find(('a'):rep(30), ('a.-'):rep(30) .. 'b')
+C11c host_stop,error 51
+string.find(('a'):rep(30), ('(a*)'):rep(30) .. 'b')
+R4 host_stop 93
+local s, p = ('a'):rep(30), ('a.-'):rep(30) .. 'b' while true do pcall(string.find, s, p) end
+C12a host_stop,limit 56
+local t = {} for i = 1, 1e6 do table.insert(t, 1, i) end
+C12b host_stop 150
+local p = setmetatable({}, {__index = function() return 1 end, __newindex = function() end, __len = function() return 1e15 end}) table.insert(p, 1, 0)
+C12c host_stop 82
+table.remove(setmetatable({}, {__len = function() return math.maxinteger end}), 1)
+C12d host_stop,error,limit 136
+local p = setmetatable({}, {__index = function() return ('x'):rep(1024) end, __len = function() return 1e9 end}) return #table.concat(p)
+C12e host_stop,limit 92
+local t = {} for i = 1, 2^20 do t[i] = 'abcdefgh' end while true do table.concat(t, ',') end
+C13 ok 55
+return #(''):rep(5^20) + #(''):rep(math.maxinteger, '')
+C14 host_stop 90
+local s = ('a'):rep(2^20 - 1) local p = ('a'):rep(2^19) .. 'b' while true do s:find(p) end
+C14b host_stop 63
+local p = ('a'):rep(2^19) .. 'b' while true do (''):find(p) end
+C15 host_stop 66
+while true do pcall(table.concat, {}, '', math.mininteger, -1) end
+C15b ok 137
+local t = setmetatable({}, {__index = function(_, i) return i % 10 end}) return table.concat(t, '', math.maxinteger - 1, math.maxinteger)
+C16 host_stop 135
+local s = ('x'):rep(1000) local p = '[' .. ('a'):rep(250) .. 'x]*y' while true do s:find(p) s:find('[%f' .. ('a'):rep(250) .. 'x]') end
+R1a host_stop,error,limit 68
+local t = setmetatable({}, {}) getmetatable(t).__call = t return t()
+R1b host_stop,error,limit 123
+local a = {} for i = 1, 250000 do a[i] = i end local t = setmetatable({}, {}) getmetatable(t).__call = t t(table.unpack(a))
+R1c host_stop,error 103
+local f = function() end for i = 1, 200 do f = setmetatable({}, {__call = f}) end while true do f() end
+M1 limit 45
+local s = 'x' for i = 1, 40 do s = s .. s end
+M2 limit 43
+local t = {} for i = 1, 1e9 do t[i] = i end
+M2b limit 85
+while true do pcall(function() local t = {} while true do t[#t + 1] = {} end end) end
+M2c limit 128
+local co = coroutine.create(function() local s = 'x' for i = 1, 40 do s = s .. s end end) while true do coroutine.resume(co) end
+M3 limit 49
+local t = {} for i = 1, 1e7 do t[i .. ''] = i end
+M4a limit 22
+string.rep('x', 1.5e9)
+M4b limit 19
+('x'):rep(1e9, ',')
+M4c ok 21
+return #('x'):rep(-1)
+M5 limit 78
+local t = {} for i = 1, 64 do t[i] = ('x'):rep(512 * 1024) end table.concat(t)
+M3b limit 56
+local t = {} for i = 1, 1e7 do t[i] = function() end end
+M3c limit 77
+local t = {} for i = 1, 1e7 do local x = i t[i] = function() return x end end
+M6a limit,error 24
+table.unpack({}, 1, 1e8)
+M6b limit,error 35
+string.byte(('x'):rep(2^20), 1, -1)
+M6c ok,limit,error 73
+local t = {} for i = 1, 1e6 do t[i] = 65 end string.char(table.unpack(t))
+M7 limit 40
+local s = ('x'):rep(2^20) s:gsub('.', s)
+M12 limit 244
+local s = ('x'):rep(2^20 - 1) local cos = {} local function f(c) if c == 'a' then return s end coroutine.yield() end for i = 1, 1000 do local co = coroutine.create(function() return ('ab'):gsub('%a', f) end) coroutine.resume(co) cos[i] = co end
+M13 limit 279
+local s = ('x'):rep(2^19) local cos = {} for i = 1, 1000 do local n = 0 local co = coroutine.create(function() return load(function() n = n + 1 if n == 1 then return 'return ' .. 'x' elseif n == 2 then return s end coroutine.yield() end) end) coroutine.resume(co) cos[i] = co end
+M8 host_stop 67
+local s = ('x'):rep(2^20) for i = 1, 1e6 do local u = s:upper() end
+M9 limit,host_stop 98
+while true do pcall(function() local t = {} while true do t[#t + 1] = ('x'):rep(2^19) end end) end
+M9b limit 104
+while true do pcall(function() local t = {} while true do t[#t + 1] = ('x'):rep(2^19) .. #t end end) end
+R3a host_stop 97
+local keep = {} for i = 1, 60000 do keep[i] = {i} end while true do local s = ('x'):rep(2^19) end
+R3b host_stop 124
+local keep = {} for i = 1, 60000 do keep[i] = {i} end local j = 0 while true do local s = ('x'):rep(2^19) .. j j = j + 1 end
+R3c host_stop 120
+local keep = {} for i = 1, 40000 do keep[i] = {i} end while true do local big = {} for i = 1, 2^18 do big[i] = i end end
+R3d host_stop 136
+local keep = {} for i = 1, 200000 do keep[i] = function() end end local j = 0 while true do local s = ('x'):rep(2^19) .. j j = j + 1 end
+R3e host_stop 130
+local keep = {} for i = 1, 100000 do keep[i] = 'k' .. i end local j = 0 while true do local t = {j, tostring(j), {}} j = j + 1 end
+R3f host_stop 157
+local keep = {} for i = 1, 15 do keep[i] = ('x'):rep(2^20 - 64) .. i end local j = 0 while true do local t = {j} local s = ('y'):rep(2^16) .. j j = j + 1 end
+R3g host_stop 124
+local keep = {} for i = 1, 90000 do keep[i] = {i} end local j = 0 while true do j = j + 1 local g = ('x'):rep(2^19) .. j end
+R3h host_stop 142
+local keep = {} for i = 1, 22 do keep[i] = ('x'):rep(2^20 - 8) .. i end local j = 0 while true do j = j + 1 local g = ('y'):rep(2^19) .. j end
+M10a error 28
+string.format('%099999d', 1)
+M10b ok 40
+return ('%5.2s'):format(('x'):rep(2^20))
+R5a limit 37
+string.format('%q', ('\0'):rep(2^20))
+R5b host_stop,limit 96
+local s = ('\0'):rep(2^18) .. ('9'):rep(2^18) while true do local _ = string.format('%q', s) end
+M11 host_stop 86
+local s = ('x'):rep(2^20) while true do s:find('y') s:find('[y]') s:gsub('x', 'y') end
+R6a ok 69
+local f, e = load(('x=' .. ('9'):rep(20) .. ' '):rep(40000)) return e
+R6b host_stop 91
+local src = ('x=1e' .. ('0'):rep(250) .. '1 '):rep(950) while true do assert(load(src)) end
+R6c host_stop 88
+local src = ('--[==[' .. (']'):rep(250) .. ']==]'):rep(4000) while true do load(src) end
+P3c compile_error 1038
+local s = [==[xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+P4a ok 426
+local a = {} a.b = a local x = a.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b.b
+P4b ok 405
+local x = (((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((1)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+P4c ok 266
+local x = {{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+P4e ok 2787
+local a = true if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then if a then end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end end 
+P4f ok 391
+local function f(...) return ... end local x = f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(f({(1)}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))}))})
+P4g ok 59
+assert(string.find(('a'):rep(199), ('a?'):rep(199) .. '$'))
+I1a ok 45
+local a, b = math.mininteger, -1 return a % b
+I1b ok 46
+local a, b = math.mininteger, -1 return a // b
+I1c ok 27
+return math.mininteger % -1
+I1d ok 28
+return math.mininteger // -1
+I1e error 24
+local z = 0 return 1 % z
+I1f error 25
+local z = 0 return 1 // z
+I1g error 12
+return 1 % 0
+I1h error 13
+return 1 // 0
+I1i ok 26
+return math.maxinteger + 1
+I2a ok 50
+return ('x'):sub(math.mininteger, math.maxinteger)
+I2b error 32
+return string.format('%d', 2^63)
+I2c ok 22
+return math.floor(0/0)
+I2d ok 24
+return math.floor(1e308)
+I2e error 23
+return string.char(256)
+I2f error 33
+return select(math.mininteger, 1)
+I2g error 36
+table.insert({}, math.maxinteger, 1)
+I2h ok 74
+return select('#', table.unpack({}, math.maxinteger - 1, math.maxinteger))
+I2i ok 39
+return tonumber('0x' .. ('f'):rep(100))
+I2j ok 26
+return tonumber('1e99999')
+I3a ok 51
+for i = math.maxinteger - 1, math.maxinteger do end
+I3b error 23
+for i = 1, 10, 0 do end
+I3c ok 64
+local n = 0 for i = 2^53 - 3, 2^53 - 1 do n = n + 1 end return n
+E1 error 72
+error(setmetatable({}, {__tostring = function() while true do end end}))
+E2a error 7
+error()
+E2b error 10
+error(nil)
+E2c error 9
+error({})
+E2d error 84
+local ok, e = xpcall(function() error('a') end, function(m) error('b') end) error(e)
+E2e error,limit 107
+local function f(n) if n == 0 then error('deep') end local ok, e = pcall(f, n - 1) error(e, 0) end f(10000)

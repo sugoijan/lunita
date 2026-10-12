@@ -11,25 +11,19 @@ use std::io::{self, BufRead, BufReader, Read};
 pub fn skip_prefix<R: BufRead>(r: &mut R) -> Result<(), io::Error> {
     if {
         let buf = r.fill_buf()?;
-        buf.len() >= 3 && buf[0] == 0xef && buf[1] == 0xbb && buf[2] == 0xbf
+        buf.starts_with(&[0xef, 0xbb, 0xbf])
     } {
         r.consume(3);
     }
 
     let buf = r.fill_buf()?;
-    let has_shebang = buf.len() >= 1 && buf[0] == b'#';
+    let has_shebang = buf.first() == Some(&b'#');
     if has_shebang {
         r.consume(1);
         loop {
             let to_consume = {
                 let buf = r.fill_buf()?;
-                let mut i = 0;
-                loop {
-                    if i >= buf.len() || buf[i] == b'\n' {
-                        break i;
-                    }
-                    i += 1;
-                }
+                buf.iter().position(|&b| b == b'\n').unwrap_or(buf.len())
             };
 
             if to_consume == 0 {

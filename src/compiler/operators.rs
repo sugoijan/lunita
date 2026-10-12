@@ -1,4 +1,5 @@
 use crate::{
+    constant::is_exact_float_integer,
     opcode::{Operation, RCIndex},
     types::RegisterIndex,
     Constant,
@@ -23,8 +24,8 @@ pub enum SimpleBinOp {
     ShiftRight,
 }
 
-// Binary operators which map to Eq / LessThan / LessEqual operations combined with Jump and
-// LoadBool
+// Binary operators which map to Eq / Less / LessEq operations, alone when they decide a branch and
+// combined with Jump and LoadBool when a value is needed
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone)]
 pub enum ComparisonBinOp {
     NotEqual,
@@ -104,16 +105,40 @@ pub fn simple_binop_const_fold<S: AsRef<[u8]>>(
     left: &Constant<S>,
     right: &Constant<S>,
 ) -> Option<Constant<S>> {
-    match simple_binop {
+    // Like PUC-Rio Lua, only fold numbers: string coercions and errors (such as integer division
+    // by zero) are left to run time.
+    if !is_number(left) || !is_number(right) {
+        return None;
+    }
+    // `%` on floats depends on the Lua version (see `Compat`), so it is left to run time.
+    if matches!(simple_binop, SimpleBinOp::Mod)
+        && (matches!(left, Constant::Number(_)) || matches!(right, Constant::Number(_)))
+    {
+        return None;
+    }
+    if !is_compat_independent(left) || !is_compat_independent(right) {
+        return None;
+    }
+    let result = match simple_binop {
         SimpleBinOp::Add => left.add(right),
         SimpleBinOp::Sub => left.subtract(right),
-        SimpleBinOp::Mul => left.multiply(right),
+        SimpleBinOp::Mul => {
+            // Lua 5.1 only has floats, where a zero product with a negative factor is -0.
+            // Past 2^63, Lua 5.4 wraps around where 5.1 rounds.
+            if let (Constant::Integer(a), Constant::Integer(b)) = (left, right) {
+                if ((*a == 0 || *b == 0) && (*a < 0 || *b < 0)) || a.checked_mul(*b).is_none() {
+                    return None;
+                }
+            }
+            left.multiply(right)
+        }
         SimpleBinOp::Mod => left.modulo(right),
         SimpleBinOp::Pow => left.exponentiate(right),
         SimpleBinOp::Div => left.float_divide(right),
         SimpleBinOp::IDiv => left.floor_divide(right),
         _ => None,
-    }
+    }?;
+    is_compat_independent(&result).then_some(result)
 }
 
 pub fn comparison_binop_operation(
@@ -161,6 +186,9 @@ pub fn comparison_binop_const_fold<S: AsRef<[u8]>>(
     left: &Constant<S>,
     right: &Constant<S>,
 ) -> Option<Constant<S>> {
+    if !is_compat_independent(left) || !is_compat_independent(right) {
+        return None;
+    }
     match comparison_binop {
         ComparisonBinOp::Equal => Some(Constant::Boolean(left.is_equal(right))),
         ComparisonBinOp::NotEqual => Some(Constant::Boolean(!left.is_equal(right))),
@@ -188,10 +216,33 @@ pub fn unop_const_fold<S: AsRef<[u8]>>(
     unop: UnaryOperator,
     cons: &Constant<S>,
 ) -> Option<Constant<S>> {
+    if !is_compat_independent(cons) {
+        return None;
+    }
     match unop {
-        UnaryOperator::Minus => cons.negate(),
+        // Lua 5.1 only has floats, where -0 is a negative zero.
+        // DELIBERATE(puc): PUC 5.1 merges the constants 0 and -0 within a function; piccolo keeps
+        // each sign (see COMPATIBILITY.md).
+        UnaryOperator::Minus if matches!(cons, Constant::Integer(0)) => None,
+        UnaryOperator::Minus if is_number(cons) => cons.negate().filter(is_compat_independent),
+        UnaryOperator::Minus => None,
         UnaryOperator::Not => Some(cons.not()),
-        UnaryOperator::BitNot => cons.bitwise_not(),
+        UnaryOperator::BitNot if is_number(cons) => cons.bitwise_not(),
+        UnaryOperator::BitNot => None,
         UnaryOperator::Len => None,
     }
+}
+
+// Whether a constant is the same value in every `Compat` mode: integers past 2^53 are floats in Lua
+// 5.1 (see `FunctionPrototype::compile_with_budget`), so operations on them, or giving them, are
+// left to run time.
+fn is_compat_independent<S>(cons: &Constant<S>) -> bool {
+    match *cons {
+        Constant::Integer(i) => is_exact_float_integer(i),
+        _ => true,
+    }
+}
+
+fn is_number<S>(cons: &Constant<S>) -> bool {
+    matches!(cons, Constant::Integer(_) | Constant::Number(_))
 }

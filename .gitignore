@@ -5,3 +5,4 @@
 .#*
 .dir-locals.el
 /.direnv/
+__pycache__/

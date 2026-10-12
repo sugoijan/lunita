@@ -1,7 +1,7 @@
 use std::{
     alloc, fmt,
     hash::{BuildHasherDefault, Hash, Hasher},
-    ops, slice,
+    mem, ops, slice,
     str::{self, Utf8Error},
 };
 
@@ -12,7 +12,11 @@ use gc_arena::{
 };
 use hashbrown::{hash_map, raw::RawTable, HashMap};
 
-use crate::compiler::string_utils::{debug_utf8_lossy, display_utf8_lossy};
+use crate::{
+    compiler::string_utils::{debug_utf8_lossy, display_utf8_lossy},
+    hash::{HashKeys, HashState},
+    table::Growth,
+};
 
 /// The Lua string type.
 ///
@@ -38,7 +42,35 @@ enum Buffer {
 }
 
 impl<'gc> String<'gc> {
-    pub fn from_buffer(mc: &Mutation<'gc>, s: Box<[u8]>) -> String<'gc> {
+    /// Creates a string, which is not interned, owning the buffer.
+    ///
+    /// Strings are hashed when they are created and compared by their hashes first: `keys` must
+    /// be the keys of the instance the string is used in, `ctx.interned_strings().hash_keys()`.
+    pub fn from_buffer(mc: &Mutation<'gc>, keys: &HashKeys, s: Box<[u8]>) -> String<'gc> {
+        let hash = keys.hash_bytes(&s);
+        Self::from_buffer_hashed(mc, s, hash)
+    }
+
+    /// Creates a string, which is not interned, copying the bytes. See [`String::from_buffer`] for
+    /// `keys`.
+    pub fn from_slice(mc: &Mutation<'gc>, keys: &HashKeys, s: impl AsRef<[u8]>) -> String<'gc> {
+        let s = s.as_ref();
+        Self::from_slice_hashed(mc, s, keys.hash_bytes(s))
+    }
+
+    /// Creates a string, which is not interned, from static bytes. See [`String::from_buffer`] for
+    /// `keys`.
+    pub fn from_static<S: ?Sized + AsRef<[u8]>>(
+        mc: &Mutation<'gc>,
+        keys: &HashKeys,
+        s: &'static S,
+    ) -> String<'gc> {
+        let s = s.as_ref();
+        Self::from_static_hashed(mc, s, keys.hash_bytes(s))
+    }
+
+    // A string with the given hash, which is its hash with the keys of its instance.
+    fn from_buffer_hashed(mc: &Mutation<'gc>, s: Box<[u8]>, hash: u64) -> String<'gc> {
         #[derive(Collect)]
         #[collect(require_static)]
         #[repr(C)]
@@ -54,7 +86,8 @@ impl<'gc> String<'gc> {
                         self.metrics.mark_external_deallocation(ptr.len());
                         drop(Box::from_raw(ptr as *mut [u8]));
                     },
-                    Buffer::Inline(_) => unreachable!(),
+                    // `Owned` strings are always indirect.
+                    Buffer::Inline(_) => {}
                 }
             }
         }
@@ -63,7 +96,7 @@ impl<'gc> String<'gc> {
         metrics.mark_external_allocation(s.len());
         let owned = Owned {
             header: StringInner {
-                hash: str_hash(&s),
+                hash,
                 buffer: Buffer::Indirect(Box::into_raw(s)),
             },
             metrics,
@@ -72,13 +105,13 @@ impl<'gc> String<'gc> {
         String(unsafe { Gc::cast::<StringInner>(Gc::new(mc, owned)) })
     }
 
-    pub fn from_slice(mc: &Mutation<'gc>, s: impl AsRef<[u8]>) -> String<'gc> {
+    fn from_slice_hashed(mc: &Mutation<'gc>, s: &[u8], hash: u64) -> String<'gc> {
         // TODO: This is an extremely silly way to allocate a dynamically sized, inline string.
         // Since gc-arena does not support variable sized allocations, we try a set of static
         // sizes to inline small strings. All larger strings are instead allocated with an indirect
         // buffer. This can be improved when gc-arena learns to allocate variable sizes.
 
-        fn create<'gc, const N: usize>(mc: &Mutation<'gc>, s: &[u8]) -> String<'gc> {
+        fn create<'gc, const N: usize>(mc: &Mutation<'gc>, s: &[u8], hash: u64) -> String<'gc> {
             #[derive(Collect)]
             #[collect(require_static)]
             #[repr(C)]
@@ -90,7 +123,7 @@ impl<'gc> String<'gc> {
             assert!(s.len() <= N);
             let mut string = InlineString {
                 header: StringInner {
-                    hash: str_hash(&s),
+                    hash,
                     buffer: Buffer::Inline(s.len()),
                 },
                 array: [0; N],
@@ -103,26 +136,25 @@ impl<'gc> String<'gc> {
             unsafe { String(Gc::cast::<StringInner>(string)) }
         }
 
-        let s = s.as_ref();
-
         macro_rules! try_sizes {
             ($($size:expr),*) => {
                 $(if s.len() <= $size {
-                    return create::<$size>(mc, s);
+                    return create::<$size>(mc, s, hash);
                 })*
             };
         }
         try_sizes!(0, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256);
+        const _: () = assert!(MAX_INLINE_LEN == 256);
 
-        Self::from_buffer(mc, s.into())
+        Self::from_buffer_hashed(mc, s.into(), hash)
     }
 
-    pub fn from_static<S: ?Sized + AsRef<[u8]>>(mc: &Mutation<'gc>, s: &'static S) -> String<'gc> {
+    fn from_static_hashed(mc: &Mutation<'gc>, s: &'static [u8], hash: u64) -> String<'gc> {
         String(Gc::new(
             mc,
             StringInner {
-                hash: str_hash(s.as_ref()),
-                buffer: Buffer::Indirect(s.as_ref()),
+                hash,
+                buffer: Buffer::Indirect(s),
             },
         ))
     }
@@ -139,6 +171,10 @@ impl<'gc> String<'gc> {
         self.0.hash
     }
 
+    #[expect(
+        clippy::unwrap_used,
+        reason = "inline strings are at most 256 bytes, so their layout cannot overflow"
+    )]
     pub fn as_bytes(self) -> &'gc [u8] {
         // SAFETY: `&'gc [u8]` has the correct lifetime because `Gc::as_ref` also returns `&'gc T`.
         unsafe {
@@ -158,11 +194,8 @@ impl<'gc> String<'gc> {
     }
 }
 
-fn str_hash(s: &[u8]) -> u64 {
-    let mut state = AHasher::default();
-    state.write(s);
-    state.finish()
-}
+// The longest string stored inline in its allocation by `String::from_slice`.
+const MAX_INLINE_LEN: usize = 256;
 
 impl<'gc> fmt::Debug for String<'gc> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
@@ -172,7 +205,8 @@ impl<'gc> fmt::Debug for String<'gc> {
 
 impl<'gc> String<'gc> {
     pub fn len(self) -> i64 {
-        self.as_bytes().len().try_into().unwrap()
+        // Allocations are at most `isize::MAX` bytes.
+        self.as_bytes().len().try_into().unwrap_or(i64::MAX)
     }
 
     pub fn to_str(self) -> Result<&'gc str, Utf8Error> {
@@ -209,7 +243,21 @@ where
     T: ?Sized + AsRef<[u8]>,
 {
     fn eq(&self, other: &T) -> bool {
-        self.as_bytes() == other.as_ref()
+        let (a, b) = (self.as_bytes(), other.as_ref());
+        // The same bytes are equal without comparing them.
+        std::ptr::eq(a, b) || a == b
+    }
+}
+
+impl<'gc> String<'gc> {
+    /// Compares two strings for equality, comparing their stored hashes before their contents.
+    ///
+    /// Strings created through [`crate::Context`] are interned, so equal strings are usually the
+    /// same string, and different strings almost always have different hashes: this only compares
+    /// the contents of two strings that are equal or have colliding hashes.
+    pub fn eq_string(self, other: String<'gc>) -> bool {
+        Gc::ptr_eq(self.0, other.0)
+            || (self.stored_hash() == other.stored_hash() && self.as_bytes() == other.as_bytes())
     }
 }
 
@@ -255,16 +303,31 @@ impl<'gc> InternedDynStrings<'gc> {
         ))
     }
 
-    fn intern(self, mc: &Mutation<'gc>, s: &[u8]) -> String<'gc> {
+    // Returns the interned string equal to `s`, whose hash is `hash`, or interns the string created
+    // from `s` by `create`, which must be equal to `s` and have the hash `hash` (only created if
+    // there is no equal string).
+    //
+    // If the set of interned strings has to grow, `can_grow` is first called with the work this
+    // takes, and if it returns false the new string is returned without being interned.
+    // DELIBERATE(cost): hash probes are not charged one by one: with the host's seed, long chains
+    // are chance (the maintainer's decision; see docs/hardening-notes.md).
+    fn intern_with<S: AsRef<[u8]>>(
+        self,
+        mc: &Mutation<'gc>,
+        s: S,
+        hash: u64,
+        create: impl FnOnce(&Mutation<'gc>, S) -> String<'gc>,
+        can_grow: impl FnOnce(Growth) -> bool,
+    ) -> String<'gc> {
         // SAFETY: If a new string is added, we call the write barrier.
         let mut dyn_strings = unsafe { self.0 .0.unlock_unchecked() }.borrow_mut();
 
         // SAFETY: The RawTable outlives the iterator
         unsafe {
-            for bucket in dyn_strings.iter_hash(str_hash(s)) {
+            for bucket in dyn_strings.iter_hash(hash) {
                 let (key, _) = *bucket.as_ref();
                 if let Some(st) = key.upgrade(mc).map(String::from_inner) {
-                    if st == s {
+                    if st == s.as_ref() {
                         return st;
                     }
                 } else {
@@ -274,10 +337,26 @@ impl<'gc> InternedDynStrings<'gc> {
             }
         }
 
+        let len = dyn_strings.len();
+        if len == dyn_strings.capacity() {
+            // The table will grow (to at least double the buckets) and rehash its entries, or
+            // rehash in place after removals; the growth is charged as the worst case.
+            let buckets = dyn_strings.buckets().saturating_mul(2).max(4);
+            let growth = Growth {
+                bytes: buckets
+                    .saturating_mul(mem::size_of::<(GcWeak<'gc, StringInner>, u64)>() + 1)
+                    .saturating_add(16),
+                entries: len,
+            };
+            if !can_grow(growth) {
+                return create(mc, s);
+            }
+        }
+
         // SAFETY: We are going to modify the dyn_strings table, so call the write barrier.
         Gc::write(mc, self.0);
 
-        let s = String::from_slice(mc, s);
+        let s = create(mc, s);
         dyn_strings.insert(
             s.stored_hash(),
             (Gc::downgrade(s.into_inner()), s.stored_hash()),
@@ -315,7 +394,7 @@ impl<'gc> InternedStaticStrings<'gc> {
         ))
     }
 
-    fn intern(self, mc: &Mutation<'gc>, s: &'static [u8]) -> String<'gc> {
+    fn intern(self, mc: &Mutation<'gc>, hash: &HashState, s: &'static [u8]) -> String<'gc> {
         let key = Static(s as *const _);
 
         // SAFETY: If a new string is added, we call the write barrier.
@@ -326,7 +405,7 @@ impl<'gc> InternedStaticStrings<'gc> {
             hash_map::Entry::Vacant(vacant) => {
                 // SAFETY: We are modifying the static_strings table, so we call the write barrier.
                 Gc::write(mc, self.0);
-                *vacant.insert(String::from_static(mc, s))
+                *vacant.insert(String::from_static_hashed(mc, s, hash.hash_bytes(s)))
             }
         }
     }
@@ -344,6 +423,7 @@ impl<'gc> InternedStaticStrings<'gc> {
 pub struct InternedStringSet<'gc> {
     dyn_strings: InternedDynStrings<'gc>,
     static_strings: InternedStaticStrings<'gc>,
+    hash: Gc<'gc, HashState>,
 }
 
 impl<'gc> InternedStringSet<'gc> {
@@ -351,15 +431,80 @@ impl<'gc> InternedStringSet<'gc> {
         InternedStringSet {
             dyn_strings: InternedDynStrings::new(mc),
             static_strings: InternedStaticStrings::new(mc),
+            hash: Gc::new(mc, HashState::default()),
         }
     }
 
+    /// The keys strings are hashed with (see [`crate::hash`]). Once they have been asked for, or a
+    /// string has been made, they no longer change.
+    pub fn hash_keys(self) -> HashKeys {
+        self.hash.string_keys()
+    }
+
+    /// Derives the hash keys from `seed`, unless a string has already been made (or the keys asked
+    /// for), returning whether it did.
+    pub fn set_hash_seed(self, seed: u64) -> bool {
+        self.hash.set_seed(seed)
+    }
+
+    // The keys for tables and the compiler, and their generation, which changes with the seed.
+    pub(crate) fn table_hash_keys(self) -> HashKeys {
+        self.hash.keys()
+    }
+
+    pub(crate) fn hash_generation(self) -> u64 {
+        self.hash.generation()
+    }
+
+    // DELIBERATE(puc): long strings are interned like short ones, so equal strings are one object
+    // (PUC's `%p` differs for equal long strings; see COMPATIBILITY.md).
     pub fn intern(self, mc: &Mutation<'gc>, s: &[u8]) -> String<'gc> {
-        self.dyn_strings.intern(mc, s)
+        self.intern_checked(mc, s, |_| true)
+    }
+
+    /// Like [`InternedStringSet::intern`], but if the set has to grow, `can_grow` is first called
+    /// with the work this takes, and if it returns false the new string is returned without being
+    /// interned.
+    pub fn intern_checked(
+        self,
+        mc: &Mutation<'gc>,
+        s: &[u8],
+        can_grow: impl FnOnce(Growth) -> bool,
+    ) -> String<'gc> {
+        let hash = self.hash.hash_bytes(s);
+        self.dyn_strings.intern_with(
+            mc,
+            s,
+            hash,
+            |mc, s| String::from_slice_hashed(mc, s, hash),
+            can_grow,
+        )
+    }
+
+    /// Like [`InternedStringSet::intern_checked`], but takes ownership of the buffer instead of
+    /// copying it if there is no equal interned string.
+    pub fn intern_buffer(
+        self,
+        mc: &Mutation<'gc>,
+        s: Box<[u8]>,
+        can_grow: impl FnOnce(Growth) -> bool,
+    ) -> String<'gc> {
+        // Short strings are stored inline in their allocation.
+        if s.len() <= MAX_INLINE_LEN {
+            return self.intern_checked(mc, &s, can_grow);
+        }
+        let hash = self.hash.hash_bytes(&s);
+        self.dyn_strings.intern_with(
+            mc,
+            s,
+            hash,
+            |mc, s| String::from_buffer_hashed(mc, s, hash),
+            can_grow,
+        )
     }
 
     pub fn intern_static(self, mc: &Mutation<'gc>, s: &'static [u8]) -> String<'gc> {
-        self.static_strings.intern(mc, s)
+        self.static_strings.intern(mc, &self.hash, s)
     }
 }
 
@@ -372,14 +517,15 @@ mod tests {
     #[test]
     fn test_string_header() {
         rootless_mutate(|mc| {
-            let test1 = String::from_buffer(mc, Box::from(b"test 1".as_slice()));
-            let test2 = String::from_buffer(mc, Box::from(b"test 2".as_slice()));
+            let keys = &HashKeys::default();
+            let test1 = String::from_buffer(mc, keys, Box::from(b"test 1".as_slice()));
+            let test2 = String::from_buffer(mc, keys, Box::from(b"test 2".as_slice()));
 
-            let test3 = String::from_slice(mc, b"test 3");
-            let test4 = String::from_slice(mc, b"test 4444 4444 4444 4444");
+            let test3 = String::from_slice(mc, keys, b"test 3");
+            let test4 = String::from_slice(mc, keys, b"test 4444 4444 4444 4444");
 
-            let test5 = String::from_static(mc, b"test 55555 55555 55555 55555 55555");
-            let test6 = String::from_static(mc, b"test 666666");
+            let test5 = String::from_static(mc, keys, b"test 55555 55555 55555 55555 55555");
+            let test6 = String::from_static(mc, keys, b"test 666666");
 
             assert_eq!(test1.as_bytes(), b"test 1");
             assert_eq!(test2.as_bytes(), b"test 2");

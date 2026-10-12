@@ -189,7 +189,9 @@ impl<'gc> ser::Serializer for Serializer<'gc> {
     {
         let value = value.serialize(self)?;
         let table = Table::new(&self.ctx);
-        table.set_field(self.ctx, variant, value);
+        table
+            .set_field(self.ctx, variant, value)
+            .map_err(ser::Error::custom)?;
         Ok(table.into())
     }
 
@@ -399,11 +401,13 @@ impl<'gc> ser::SerializeStruct for SerializeStruct<'gc> {
     where
         T: serde::Serialize,
     {
-        self.table.set_field(
-            self.ctx,
-            key,
-            value.serialize(Serializer::new(self.ctx, self.options))?,
-        );
+        self.table
+            .set_field(
+                self.ctx,
+                key,
+                value.serialize(Serializer::new(self.ctx, self.options))?,
+            )
+            .map_err(ser::Error::custom)?;
         Ok(())
     }
 
@@ -456,7 +460,9 @@ impl<'gc> ser::SerializeTupleVariant for SerializeTupleVariant<'gc> {
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
         let enclosing = Table::new(&self.ctx);
-        enclosing.set_field(self.ctx, self.variant, self.table);
+        enclosing
+            .set_field(self.ctx, self.variant, self.table)
+            .map_err(ser::Error::custom)?;
         Ok(enclosing.into())
     }
 }
@@ -491,17 +497,21 @@ impl<'gc> ser::SerializeStructVariant for SerializeStructVariant<'gc> {
     where
         T: serde::Serialize,
     {
-        self.table.set_field(
-            self.ctx,
-            key,
-            value.serialize(Serializer::new(self.ctx, self.options))?,
-        );
+        self.table
+            .set_field(
+                self.ctx,
+                key,
+                value.serialize(Serializer::new(self.ctx, self.options))?,
+            )
+            .map_err(ser::Error::custom)?;
         Ok(())
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
         let enclosing = Table::new(&self.ctx);
-        enclosing.set_field(self.ctx, self.variant, self.table);
+        enclosing
+            .set_field(self.ctx, self.variant, self.table)
+            .map_err(ser::Error::custom)?;
         Ok(enclosing.into())
     }
 }

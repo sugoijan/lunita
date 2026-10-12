@@ -128,8 +128,8 @@ impl<'gc, M> Any<'gc, M> {
             },
         );
 
-        // SAFETY: We know we can cast to a `Header<M>` because `Value<M, Root<'gc, R>>` is
-        // `#[repr(C)]` and `Header<M>` is the first field
+        // SAFETY: We know we can cast to an `AnyInner<M>` because `AnyValue<M, Root<'gc, R>>` is
+        // `#[repr(C)]` and `AnyInner<M>` is the first field
         Self(unsafe { Gc::cast::<AnyInner<M>>(val) })
     }
 

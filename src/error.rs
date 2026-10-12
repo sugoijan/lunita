@@ -4,8 +4,8 @@ use gc_arena::{Collect, Gc, Rootable};
 use thiserror::Error;
 
 use crate::{
-    Callback, CallbackReturn, Context, FromValue, Function, IntoValue, MetaMethod, Singleton,
-    Table, UserData, Value,
+    thread::VMError, Callback, CallbackReturn, Context, FromValue, Function, IntoValue, LimitError,
+    MetaMethod, Singleton, Table, UserData, Value,
 };
 
 #[derive(Debug, Clone, Copy, Error)]
@@ -135,6 +135,18 @@ impl RuntimeError {
     {
         self.0.downcast_ref::<E>()
     }
+
+    /// If this error is a resource limit error, or was caused by one, returns which limit was
+    /// exceeded.
+    pub fn limit_error(&self) -> Option<LimitError> {
+        self.0.chain().find_map(|err| {
+            // A `VMError::Limit` is transparent: the limit error is neither it nor its source.
+            match err.downcast_ref::<VMError>() {
+                Some(VMError::Limit(limit)) => Some(*limit),
+                _ => err.downcast_ref::<LimitError>().copied(),
+            }
+        })
+    }
 }
 
 impl AsRef<dyn StdError + 'static> for RuntimeError {
@@ -142,6 +154,12 @@ impl AsRef<dyn StdError + 'static> for RuntimeError {
         (*self.0).as_ref()
     }
 }
+
+/// An error message from a library function, which the executor turns into a Lua string with the
+/// position of the calling Lua code when the function returns it (as `luaL_error` adds it).
+#[derive(Debug, Error)]
+#[error("{}", StdString::from_utf8_lossy(.0))]
+pub(crate) struct LibraryError(pub(crate) Vec<u8>);
 
 /// An error that can be raised from Lua code.
 ///
@@ -223,27 +241,39 @@ impl<'gc> Error<'gc> {
                 #[collect(no_drop)]
                 struct UDMeta<'gc>(Table<'gc>);
 
-                impl<'gc> Singleton<'gc> for UDMeta<'gc> {
-                    fn create(ctx: Context<'gc>) -> Self {
-                        let table = Table::new(&ctx);
-                        table
-                            .set(
-                                ctx,
-                                MetaMethod::ToString,
-                                Callback::from_fn(&ctx, |ctx, _, mut stack| {
-                                    let ud = stack.consume::<UserData>(ctx)?;
-                                    let error = ud.downcast_static::<RuntimeError>()?;
-                                    stack.replace(ctx, error.to_string());
-                                    Ok(CallbackReturn::Return)
-                                }),
-                            )
-                            .unwrap();
-                        Self(table)
+                impl<'gc> UDMeta<'gc> {
+                    // Refused only past the memory limit; the singleton is kept, so the next
+                    // error tries again.
+                    fn install(&self, ctx: Context<'gc>) {
+                        if !self.0.get_value(ctx, MetaMethod::ToString).is_nil() {
+                            return;
+                        }
+                        let _ = self.0.set_field(
+                            ctx,
+                            MetaMethod::ToString.name(),
+                            Callback::from_fn(&ctx, |ctx, _, mut stack| {
+                                let ud = stack.consume::<UserData>(ctx)?;
+                                let error = ud.downcast_static::<RuntimeError>()?;
+                                // With its causes, as `Error` displays it.
+                                stack.replace(ctx, format!("{error:#}"));
+                                Ok(CallbackReturn::Return)
+                            }),
+                        );
                     }
                 }
 
+                impl<'gc> Singleton<'gc> for UDMeta<'gc> {
+                    fn create(ctx: Context<'gc>) -> Self {
+                        let meta = Self(Table::new(&ctx));
+                        meta.install(ctx);
+                        meta
+                    }
+                }
+
+                let meta = ctx.singleton::<Rootable![UDMeta<'_>]>();
+                meta.install(ctx);
                 let ud = UserData::new_static(&ctx, err.clone());
-                ud.set_metatable(&ctx, Some(ctx.singleton::<Rootable![UDMeta<'_>]>().0));
+                ud.set_metatable(&ctx, Some(meta.0));
                 ud.into()
             }
         }
@@ -251,6 +281,14 @@ impl<'gc> Error<'gc> {
 
     pub fn to_extern(&self) -> ExternError {
         self.clone().into_extern()
+    }
+
+    /// If this error is a resource limit error, returns which limit was exceeded.
+    pub fn limit_error(&self) -> Option<LimitError> {
+        match self {
+            Error::Lua(_) => None,
+            Error::Runtime(err) => err.limit_error(),
+        }
     }
 
     pub fn into_extern(self) -> ExternError {
@@ -296,6 +334,14 @@ impl StdError for ExternError {
 }
 
 impl ExternError {
+    /// If this error is a resource limit error, returns which limit was exceeded.
+    pub fn limit_error(&self) -> Option<LimitError> {
+        match self {
+            ExternError::Lua(_) => None,
+            ExternError::Runtime(err) => err.limit_error(),
+        }
+    }
+
     pub fn root_cause(&self) -> &(dyn StdError + 'static) {
         match self {
             ExternError::Lua(err) => err,

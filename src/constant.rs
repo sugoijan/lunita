@@ -1,4 +1,7 @@
-use std::hash::{Hash, Hasher};
+use std::{
+    cmp::Ordering::{self, Equal, Greater, Less},
+    hash::{Hash, Hasher},
+};
 
 use gc_arena::Collect;
 
@@ -81,13 +84,7 @@ impl<S: AsRef<[u8]>> Constant<S> {
     pub fn to_integer(&self) -> Option<i64> {
         match self.to_numeric() {
             Some(Self::Integer(a)) => Some(a),
-            Some(Self::Number(a)) => {
-                if ((a as i64) as f64) == a {
-                    Some(a as i64)
-                } else {
-                    None
-                }
-            }
+            Some(Self::Number(a)) => f64_to_i64(a),
             _ => None,
         }
     }
@@ -95,22 +92,22 @@ impl<S: AsRef<[u8]>> Constant<S> {
     // Mathematical operators
 
     pub fn add(&self, rhs: &Self) -> Option<Self> {
-        Some(match (self, rhs) {
-            (&Self::Integer(a), &Self::Integer(b)) => Self::Integer(a.wrapping_add(b)),
+        Some(match (self.to_numeric()?, rhs.to_numeric()?) {
+            (Self::Integer(a), Self::Integer(b)) => Self::Integer(a.wrapping_add(b)),
             (a, b) => Self::Number(a.to_number()? + b.to_number()?),
         })
     }
 
     pub fn subtract(&self, rhs: &Self) -> Option<Self> {
-        Some(match (self, rhs) {
-            (&Self::Integer(a), &Self::Integer(b)) => Self::Integer(a.wrapping_sub(b)),
+        Some(match (self.to_numeric()?, rhs.to_numeric()?) {
+            (Self::Integer(a), Self::Integer(b)) => Self::Integer(a.wrapping_sub(b)),
             (a, b) => Self::Number(a.to_number()? - b.to_number()?),
         })
     }
 
     pub fn multiply(&self, rhs: &Self) -> Option<Self> {
-        Some(match (self, rhs) {
-            (&Self::Integer(a), &Self::Integer(b)) => Self::Integer(a.wrapping_mul(b)),
+        Some(match (self.to_numeric()?, rhs.to_numeric()?) {
+            (Self::Integer(a), Self::Integer(b)) => Self::Integer(a.wrapping_mul(b)),
             (a, b) => Self::Number(a.to_number()? * b.to_number()?),
         })
     }
@@ -123,41 +120,33 @@ impl<S: AsRef<[u8]>> Constant<S> {
     /// This operation returns an Integer only if both arguments are Integers. Rounding is towards
     /// negative infinity.
     pub fn floor_divide(&self, rhs: &Self) -> Option<Self> {
-        match (self, rhs) {
-            (&Self::Integer(a), &Self::Integer(b)) => {
+        match (self.to_numeric()?, rhs.to_numeric()?) {
+            (Self::Integer(a), Self::Integer(b)) => {
                 if b == 0 {
                     None
                 } else {
-                    // Wrapping version of std's div_floor
-                    let d = a.wrapping_div(b);
-                    let r = a.wrapping_rem(b);
-                    let d = if (r > 0 && b < 0) || (r < 0 && b > 0) {
-                        d - 1
-                    } else {
-                        d
-                    };
-                    Some(Self::Integer(d))
+                    Some(Self::Integer(integer_floor_divide(a, b)))
                 }
             }
-            (a, b) => Some(Self::Number((a.to_number()? / b.to_number()?).floor())),
+            (a, b) => Some(Self::Number(float_floor_divide(
+                a.to_number()?,
+                b.to_number()?,
+            ))),
         }
     }
 
     /// Computes the Lua modulus (`%`) operator. This is unlike Rust's `%` operator which computes
     /// the remainder.
     pub fn modulo(&self, rhs: &Self) -> Option<Self> {
-        match (self, rhs) {
-            (&Self::Integer(a), &Self::Integer(b)) => {
+        match (self.to_numeric()?, rhs.to_numeric()?) {
+            (Self::Integer(a), Self::Integer(b)) => {
                 if b == 0 {
                     None
                 } else {
-                    Some(Self::Integer(((a % b) + b) % b))
+                    Some(Self::Integer(integer_modulo(a, b)))
                 }
             }
-            (a, b) => {
-                let (a, b) = (a.to_number()?, b.to_number()?);
-                Some(Self::Number(((a % b) + b) % b))
-            }
+            (a, b) => Some(Self::Number(float_modulo(a.to_number()?, b.to_number()?))),
         }
     }
 
@@ -167,10 +156,9 @@ impl<S: AsRef<[u8]>> Constant<S> {
     }
 
     pub fn negate(&self) -> Option<Self> {
-        match self {
-            &Self::Integer(a) => Some(Self::Integer(a.wrapping_neg())),
-            &Self::Number(a) => Some(Self::Number(-a)),
-            s => s.to_number().map(|x| Self::Number(-x)),
+        match self.to_numeric()? {
+            Self::Integer(a) => Some(Self::Integer(a.wrapping_neg())),
+            a => Some(Self::Number(-a.to_number()?)),
         }
     }
 
@@ -193,24 +181,17 @@ impl<S: AsRef<[u8]>> Constant<S> {
     }
 
     pub fn shift_left(&self, rhs: &Self) -> Option<Self> {
-        let rhs = rhs.to_integer()?;
-        if rhs < 0 {
-            return None;
-        }
-        let rhs = rhs.try_into().ok().unwrap_or(u32::MAX);
-        Some(Self::Integer(
-            self.to_integer()?.checked_shl(rhs).unwrap_or(0),
-        ))
+        Some(Self::Integer(shift_left(
+            self.to_integer()?,
+            rhs.to_integer()?,
+        )))
     }
 
     pub fn shift_right(&self, rhs: &Self) -> Option<Self> {
-        let rhs = rhs.to_integer()?;
-        if rhs < 0 {
-            return None;
-        }
-        let lhs = self.to_integer()? as u64;
-        let rhs = rhs.try_into().ok().unwrap_or(u32::MAX);
-        Some(Self::Integer(lhs.checked_shr(rhs).unwrap_or(0) as i64))
+        Some(Self::Integer(shift_left(
+            self.to_integer()?,
+            rhs.to_integer()?.wrapping_neg(),
+        )))
     }
 
     // Comparison operators
@@ -224,11 +205,11 @@ impl<S: AsRef<[u8]>> Constant<S> {
             (Self::Boolean(_), _) => false,
 
             (Self::Integer(a), Self::Integer(b)) => a == b,
-            (Self::Integer(a), Self::Number(b)) => *a as f64 == *b,
+            (Self::Integer(a), Self::Number(b)) => compare_integer_float(*a, *b) == Some(Equal),
             (Self::Integer(_), _) => false,
 
             (Self::Number(a), Self::Number(b)) => a == b,
-            (Self::Number(a), Self::Integer(b)) => *b as f64 == *a,
+            (Self::Number(a), Self::Integer(b)) => compare_integer_float(*b, *a) == Some(Equal),
             (Self::Number(_), _) => false,
 
             (Self::String(a), Self::String(b)) => a.as_ref() == b.as_ref(),
@@ -239,9 +220,9 @@ impl<S: AsRef<[u8]>> Constant<S> {
     pub fn less_than(&self, rhs: &Self) -> Option<bool> {
         Some(match (self, rhs) {
             (Self::Integer(a), Self::Integer(b)) => a < b,
-            (Self::Integer(a), Self::Number(b)) => (*a as f64) < *b,
+            (Self::Integer(a), Self::Number(b)) => compare_integer_float(*a, *b) == Some(Less),
             (Self::Number(a), Self::Number(b)) => a < b,
-            (Self::Number(a), Self::Integer(b)) => *a < *b as f64,
+            (Self::Number(a), Self::Integer(b)) => compare_integer_float(*b, *a) == Some(Greater),
             (Self::String(a), Self::String(b)) => a.as_ref() < b.as_ref(),
             _ => return None,
         })
@@ -250,12 +231,126 @@ impl<S: AsRef<[u8]>> Constant<S> {
     pub fn less_equal(&self, rhs: &Self) -> Option<bool> {
         Some(match (self, rhs) {
             (Self::Integer(a), Self::Integer(b)) => a <= b,
-            (Self::Integer(a), Self::Number(b)) => (*a as f64) <= *b,
+            (Self::Integer(a), Self::Number(b)) => {
+                matches!(compare_integer_float(*a, *b), Some(Less | Equal))
+            }
             (Self::Number(a), Self::Number(b)) => a <= b,
-            (Self::Number(a), Self::Integer(b)) => *a <= *b as f64,
+            (Self::Number(a), Self::Integer(b)) => {
+                matches!(compare_integer_float(*b, *a), Some(Greater | Equal))
+            }
             (Self::String(a), Self::String(b)) => a.as_ref() <= b.as_ref(),
             _ => return None,
         })
+    }
+}
+
+/// `a << b` as Lua 5.4's `luaV_shiftl`: a negative `b` shifts right (logically), and shifting by
+/// 64 bits or more gives 0. `a >> b` is `a << -b`.
+pub fn shift_left(a: i64, b: i64) -> i64 {
+    if b <= -64 || b >= 64 {
+        0
+    } else if b < 0 {
+        ((a as u64) >> b.unsigned_abs()) as i64
+    } else {
+        ((a as u64) << b) as i64
+    }
+}
+
+/// Compares an integer with a float exactly, as Lua 5.4 does (converting the integer to a float
+/// would round it above 2^53: `2^53 + 1` is not equal to `2.0^53`, and `math.maxinteger` is less than
+/// `2.0^63`). `None` if the float is NaN.
+pub fn compare_integer_float(i: i64, f: f64) -> Option<Ordering> {
+    // 2^63, the first float above every integer.
+    const TWO_POW_63: f64 = 9_223_372_036_854_775_808.0;
+    if f.is_nan() {
+        None
+    } else if f >= TWO_POW_63 {
+        Some(Less)
+    } else if f < -TWO_POW_63 {
+        Some(Greater)
+    } else {
+        // `f` truncated is in the range of `i64`, and converts exactly.
+        let whole = f.trunc();
+        Some(i.cmp(&(whole as i64)).then_with(|| {
+            // Equal integral parts: the fraction decides.
+            0.0f64.partial_cmp(&(f - whole)).unwrap_or(Equal)
+        }))
+    }
+}
+
+// The largest magnitude up to which every integer is exactly a float, 2^53.
+const MAX_EXACT_FLOAT_INTEGER: u64 = 1 << 53;
+
+/// Whether an integer is exactly a float, so that Lua 5.1 (which only has floats) holds the same
+/// number.
+pub(crate) fn is_exact_float_integer(i: i64) -> bool {
+    i.unsigned_abs() <= MAX_EXACT_FLOAT_INTEGER
+}
+
+// DELIBERATE(puc): Lua51 mode keeps 64-bit integers, within 2^53 for literals, `+`, `-`, `*` and
+// negation; hex literals past 2^63 wrap, the bitwise operators and `math.maxinteger` exist, and
+// an integer `for` loop counts past 2^53 exactly (see COMPATIBILITY.md).
+/// The result of an integer operation (computed exactly) in Lua 5.1, which only has floats: past
+/// 2^53 it is the float the exact result rounds to, as float arithmetic gives it when the operands
+/// are exactly floats.
+pub(crate) fn lua51_integer_result<S>(r: i128) -> Constant<S> {
+    match i64::try_from(r) {
+        Ok(i) if is_exact_float_integer(i) => Constant::Integer(i),
+        _ => Constant::Number(r as f64),
+    }
+}
+
+/// Lua integer floor division, `b` must not be zero.
+///
+/// `i64::MIN // -1` wraps around to `i64::MIN`, as in PUC-Rio Lua.
+pub fn integer_floor_divide(a: i64, b: i64) -> i64 {
+    let d = a.wrapping_div(b);
+    // If the remainder is non-zero and has a different sign than the divisor, round towards
+    // negative infinity. `d` cannot be `i64::MIN` here, since the remainder is non-zero.
+    if a.wrapping_rem(b) != 0 && (a ^ b) < 0 {
+        d.wrapping_sub(1)
+    } else {
+        d
+    }
+}
+
+/// Lua integer modulus (the remainder of floor division), `b` must not be zero.
+///
+/// `i64::MIN % -1` is 0, as in PUC-Rio Lua.
+pub fn integer_modulo(a: i64, b: i64) -> i64 {
+    let r = a.wrapping_rem(b);
+    if r != 0 && (r ^ b) < 0 {
+        // `r` and `b` have different signs, so this cannot overflow.
+        r.wrapping_add(b)
+    } else {
+        r
+    }
+}
+
+/// Lua float floor division.
+pub fn float_floor_divide(a: f64, b: f64) -> f64 {
+    (a / b).floor()
+}
+
+/// Lua float modulus, matching PUC-Rio Lua 5.4's `luai_nummod`.
+pub fn float_modulo(a: f64, b: f64) -> f64 {
+    let m = a % b;
+    if if m > 0.0 { b < 0.0 } else { m < 0.0 && b > 0.0 } {
+        m + b
+    } else {
+        m
+    }
+}
+
+/// Converts a float to an integer if it has an exact integer representation.
+pub fn f64_to_i64(n: f64) -> Option<i64> {
+    // `-2^63` is exactly representable as an `f64` and as an `i64`, `2^63` is not representable as
+    // an `i64`, and every float in between with no fractional part is an integer.
+    const MIN: f64 = i64::MIN as f64;
+    if n >= MIN && n < -MIN && n.fract() == 0.0 {
+        Some(n as i64)
+    } else {
+        None
     }
 }
 

@@ -8,6 +8,7 @@ use crate::compiler::string_utils::{
     read_hex_float, read_hex_integer, ALERT_BEEP, BACKSPACE,
 };
 
+use super::budget::{BudgetError, CompileBudget};
 use super::{
     string_utils::{debug_utf8_lossy, is_alpha, is_digit, is_newline, FORM_FEED, VERTICAL_TAB},
     StringInterner,
@@ -70,8 +71,8 @@ pub enum Token<S> {
     RightBracket,
     LeftBrace,
     RightBrace,
-    /// Numerals are only lexed as integers in the range [-(2^63-1), 2^63-1], otherwise they will be
-    /// lexed as floats.
+    /// Decimal numerals are lexed as integers up to 2^63-1 and as floats past that (a `-` is a
+    /// separate token); hexadecimal integer numerals wrap around modulo 2^64, as in Lua 5.4.
     Integer(i64),
     Float(f64),
     Name(S),
@@ -217,6 +218,8 @@ fn print_char(c: u8) -> char {
 
 #[derive(Debug, Error)]
 pub enum LexError {
+    #[error("{0}")]
+    Budget(BudgetError),
     #[error("short string not finished, expected matching {}", print_char(*.0))]
     UnfinishedShortString(u8),
     #[error("unexpected character: {}", print_char(*.0))]
@@ -239,6 +242,10 @@ pub enum LexError {
     UnfinishedLongString,
     #[error("malformed number")]
     BadNumber,
+    #[error("unexpected end of source")]
+    UnexpectedEnd,
+    #[error("string too long")]
+    StringTooLong,
 }
 
 /// A 0-indexed line number of the current source input.
@@ -257,6 +264,8 @@ pub struct Lexer<'a, S> {
     interner: S,
     peek_count: usize,
     string_buffer: Vec<u8>,
+    max_string_len: Option<usize>,
+    budget: Option<&'a CompileBudget>,
     line_number: u64,
 }
 
@@ -270,8 +279,22 @@ where
             interner,
             peek_count: 0,
             string_buffer: Vec::new(),
+            max_string_len: None,
+            budget: None,
             line_number: 0,
         }
+    }
+
+    /// Charge the bytes of every string literal and name to `budget` before interning them (see
+    /// [`CompileBudget`]), failing with [`LexError::Budget`] past its memory limit.
+    pub fn set_budget(&mut self, budget: &'a CompileBudget) {
+        self.budget = Some(budget);
+    }
+
+    /// Limit the length of string literals, names and numerals, longer ones are a
+    /// [`LexError::StringTooLong`] error.
+    pub fn set_max_string_len(&mut self, max_string_len: Option<usize>) {
+        self.max_string_len = max_string_len;
     }
 
     /// Current line number of the source file.
@@ -339,8 +362,9 @@ where
         let mut do_read_token = || {
             if let Some(c) = self.peek(0)? {
                 Ok(Some(match c {
+                    // Whitespace and comments have been skipped.
                     b' ' | b'\t' | VERTICAL_TAB | FORM_FEED | b'\n' | b'\r' => {
-                        unreachable!("whitespace should have been skipped");
+                        return Err(LexError::UnexpectedCharacter(c));
                     }
 
                     b'-' => {
@@ -348,7 +372,7 @@ where
                             self.advance(1);
                             Token::Minus
                         } else {
-                            unreachable!("whitespace should have been skipped");
+                            return Err(LexError::UnexpectedCharacter(c));
                         }
                     }
 
@@ -356,7 +380,7 @@ where
                         let next = self.peek(1)?;
                         if next == Some(b'=') || next == Some(b'[') {
                             self.read_long_string(true)?;
-                            Token::String(self.take_string())
+                            Token::String(self.take_string()?)
                         } else {
                             self.advance(1);
                             Token::LeftBracket
@@ -433,7 +457,7 @@ where
 
                     b'"' | b'\'' => {
                         self.read_short_string()?;
-                        Token::String(self.take_string())
+                        Token::String(self.take_string()?)
                     }
 
                     b'.' => {
@@ -461,12 +485,12 @@ where
                             t
                         } else if is_alpha(c) {
                             self.string_buffer.clear();
-                            self.string_buffer.push(c);
+                            self.push_string(c)?;
                             self.advance(1);
 
                             while let Some(c) = self.peek(0)? {
                                 if is_alpha(c) || is_digit(c) {
-                                    self.string_buffer.push(c);
+                                    self.push_string(c)?;
                                     self.advance(1);
                                 } else {
                                     break;
@@ -477,7 +501,7 @@ where
                             {
                                 t
                             } else {
-                                Token::Name(self.take_string())
+                                Token::Name(self.take_string()?)
                             }
                         } else {
                             return Err(LexError::UnexpectedCharacter(c));
@@ -498,7 +522,8 @@ where
         }
     }
 
-    // End of stream encountered, clear any input handles and temp buffers
+    // End of stream encountered, or an error (after which the lexer stays at the end): clear any
+    // input handles and temp buffers
     fn reset(&mut self) {
         self.source = &[];
         self.peek_count = 0;
@@ -506,15 +531,15 @@ where
     }
 
     // Read any of "\n", "\r", "\n\r", or "\r\n" as a single newline, and increment the current line
-    // number. If `append_buffer` is true, then appends the read newline to the string buffer.
+    // number. If `append_string` is true, then appends a single `\n` to the string buffer.
     fn read_line_end(&mut self, append_string: bool) -> Result<(), LexError> {
-        let newline = self.peek(0).unwrap().unwrap();
-        assert!(is_newline(newline));
+        let newline = self.expect_peek()?;
+        debug_assert!(is_newline(newline));
         self.advance(1);
         // We always append a single plain `\n` character for any newline characters, matching the
         // behavior of PUC-Rio Lua.
         if append_string {
-            self.string_buffer.push(b'\n');
+            self.push_string(b'\n')?;
         }
 
         if let Some(next_newline) = self.peek(0)? {
@@ -530,8 +555,8 @@ where
     // Read a string on a single line delimited by ' or " that allows for \ escaping of certain
     // characters. Always reads the contained string into the string buffer.
     fn read_short_string(&mut self) -> Result<(), LexError> {
-        let start_quote = self.peek(0).unwrap().unwrap();
-        assert!(start_quote == b'\'' || start_quote == b'"');
+        let start_quote = self.expect_peek()?;
+        debug_assert!(start_quote == b'\'' || start_quote == b'"');
         self.advance(1);
 
         self.string_buffer.clear();
@@ -555,52 +580,52 @@ where
                 {
                     b'a' => {
                         self.advance(1);
-                        self.string_buffer.push(ALERT_BEEP);
+                        self.push_string(ALERT_BEEP)?;
                     }
 
                     b'b' => {
                         self.advance(1);
-                        self.string_buffer.push(BACKSPACE);
+                        self.push_string(BACKSPACE)?;
                     }
 
                     b'f' => {
                         self.advance(1);
-                        self.string_buffer.push(FORM_FEED);
+                        self.push_string(FORM_FEED)?;
                     }
 
                     b'n' => {
                         self.advance(1);
-                        self.string_buffer.push(b'\n');
+                        self.push_string(b'\n')?;
                     }
 
                     b'r' => {
                         self.advance(1);
-                        self.string_buffer.push(b'\r');
+                        self.push_string(b'\r')?;
                     }
 
                     b't' => {
                         self.advance(1);
-                        self.string_buffer.push(b'\t');
+                        self.push_string(b'\t')?;
                     }
 
                     b'v' => {
                         self.advance(1);
-                        self.string_buffer.push(VERTICAL_TAB);
+                        self.push_string(VERTICAL_TAB)?;
                     }
 
                     b'\\' => {
                         self.advance(1);
-                        self.string_buffer.push(b'\\');
+                        self.push_string(b'\\')?;
                     }
 
                     b'\'' => {
                         self.advance(1);
-                        self.string_buffer.push(b'\'');
+                        self.push_string(b'\'')?;
                     }
 
                     b'"' => {
                         self.advance(1);
-                        self.string_buffer.push(b'"');
+                        self.push_string(b'"')?;
                     }
 
                     b'\n' | b'\r' => {
@@ -617,7 +642,7 @@ where
                             .peek(1)?
                             .and_then(from_hex_digit)
                             .ok_or(LexError::HexDigitExpected)?;
-                        self.string_buffer.push(first << 4 | second);
+                        self.push_string(first << 4 | second)?;
                         self.advance(2);
                     }
 
@@ -647,7 +672,7 @@ where
                         let c = char::from_u32(u).ok_or(LexError::EscapeUnicodeInvalid)?;
                         let mut buf = [0; 4];
                         for &b in c.encode_utf8(&mut buf).as_bytes() {
-                            self.string_buffer.push(b);
+                            self.push_string(b)?;
                         }
                     }
 
@@ -679,7 +704,7 @@ where
                                 return Err(LexError::EscapeDecimalTooLarge);
                             }
 
-                            self.string_buffer.push(u as u8);
+                            self.push_string(u as u8)?;
                         } else {
                             return Err(LexError::InvalidEscape);
                         }
@@ -688,7 +713,7 @@ where
             } else if c == start_quote {
                 break;
             } else {
-                self.string_buffer.push(c);
+                self.push_string(c)?;
             }
         }
 
@@ -698,7 +723,7 @@ where
     // Read a [=*[...]=*] sequence with matching numbers of '='. If `into_string` is true, writes
     // the contained string into the string buffer.
     fn read_long_string(&mut self, into_string: bool) -> Result<(), LexError> {
-        assert_eq!(self.peek(0).unwrap().unwrap(), b'[');
+        debug_assert_eq!(self.peek(0)?, Some(b'['));
         self.advance(1);
 
         if into_string {
@@ -749,9 +774,9 @@ where
                         // If it turns out this is not a valid long string close delimiter, we need
                         // to add the invalid close delimiter to the string.
                         if into_string {
-                            self.string_buffer.push(b']');
+                            self.push_string(b']')?;
                             for _ in 0..close_sep_length {
-                                self.string_buffer.push(b'=');
+                                self.push_string(b'=')?;
                             }
                         }
                     }
@@ -759,7 +784,7 @@ where
 
                 c => {
                     if into_string {
-                        self.string_buffer.push(c);
+                        self.push_string(c)?;
                     }
                     self.advance(1);
                 }
@@ -771,29 +796,29 @@ where
 
     // Reads a hex or decimal integer or floating point identifier. Allows decimal integers (123),
     // hex integers (0xdeadbeef), decimal floating point with optional exponent and exponent sign
-    // (3.21e+1), and hex floats with optional exponent and exponent sign (0xe.2fp-1c).
+    // (3.21e+1), and hex floats with optional exponent and exponent sign (0xe.2fp-1).
     fn read_numeral(&mut self) -> Result<Token<S::String>, LexError> {
-        let p1 = self.peek(0).unwrap().unwrap();
-        assert!(p1 == b'.' || is_digit(p1));
+        let p1 = self.expect_peek()?;
+        debug_assert!(p1 == b'.' || is_digit(p1));
 
         self.string_buffer.clear();
 
         let p2 = self.peek(1)?;
         let is_hex = p1 == b'0' && (p2 == Some(b'x') || p2 == Some(b'X'));
-        if is_hex {
-            self.string_buffer.push(p1);
-            self.string_buffer.push(p2.unwrap());
+        if let (true, Some(p2)) = (is_hex, p2) {
+            self.push_string(p1)?;
+            self.push_string(p2)?;
             self.advance(2);
         }
 
         let mut has_radix = false;
         while let Some(c) = self.peek(0)? {
             if c == b'.' && !has_radix {
-                self.string_buffer.push(b'.');
+                self.push_string(b'.')?;
                 has_radix = true;
                 self.advance(1);
             } else if (!is_hex && is_digit(c)) || (is_hex && is_hex_digit(c)) {
-                self.string_buffer.push(c);
+                self.push_string(c)?;
                 self.advance(1);
             } else {
                 break;
@@ -805,20 +830,20 @@ where
             if (is_hex && (exp_begin == b'p' || exp_begin == b'P'))
                 || (!is_hex && (exp_begin == b'e' || exp_begin == b'E'))
             {
-                self.string_buffer.push(exp_begin);
+                self.push_string(exp_begin)?;
                 has_exp = true;
                 self.advance(1);
 
                 if let Some(sign) = self.peek(0)? {
                     if sign == b'+' || sign == b'-' {
-                        self.string_buffer.push(sign);
+                        self.push_string(sign)?;
                         self.advance(1);
                     }
                 }
 
                 while let Some(c) = self.peek(0)? {
                     if is_digit(c) {
-                        self.string_buffer.push(c);
+                        self.push_string(c)?;
                         self.advance(1);
                     } else {
                         break;
@@ -853,19 +878,41 @@ where
         Ok(self.source.get(n).copied())
     }
 
+    // Reads the next character, which must be present.
+    fn expect_peek(&mut self) -> Result<u8, LexError> {
+        self.peek(0)?.ok_or(LexError::UnexpectedEnd)
+    }
+
     fn advance(&mut self, n: usize) {
-        assert!(
+        debug_assert!(
             n <= self.peek_count,
             "cannot advance over un-peeked characters"
         );
-        self.peek_count -= n;
-        self.source = &self.source[n..];
+        self.peek_count = self.peek_count.saturating_sub(n);
+        self.source = self.source.get(n..).unwrap_or_default();
     }
 
-    fn take_string(&mut self) -> S::String {
+    // Append a byte to the string being read, checking its length.
+    fn push_string(&mut self, c: u8) -> Result<(), LexError> {
+        if self
+            .max_string_len
+            .is_some_and(|max| self.string_buffer.len() >= max)
+        {
+            return Err(LexError::StringTooLong);
+        }
+        self.string_buffer.push(c);
+        Ok(())
+    }
+
+    fn take_string(&mut self) -> Result<S::String, LexError> {
+        if let Some(budget) = self.budget {
+            budget
+                .charge_memory(self.string_buffer.len())
+                .map_err(LexError::Budget)?;
+        }
         let s = self.interner.intern(&self.string_buffer);
         self.string_buffer.clear();
-        s
+        Ok(s)
     }
 }
 
@@ -898,6 +945,8 @@ fn get_reserved_word_token<S>(word: &[u8]) -> Option<Token<S>> {
         b"elseif" => Some(Token::ElseIf),
         b"end" => Some(Token::End),
         b"function" => Some(Token::Function),
+        // DELIBERATE(puc): Lua 5.4's syntax (`goto`, `//`, bitwise operators, `<const>`) is accepted in
+        // Lua51 mode too (see COMPATIBILITY.md).
         b"goto" => Some(Token::Goto),
         b"if" => Some(Token::If),
         b"in" => Some(Token::In),

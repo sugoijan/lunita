@@ -10,7 +10,9 @@ fn run_lua_code(name: &str, code: &[u8]) -> Result<(), ExternError> {
 
     let exec = lua.try_enter(|ctx| {
         let closure = Closure::load(ctx, Some(name), code)?;
-        Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
+        // Scripts get their chunk name as their argument.
+        let name = ctx.intern(name.as_bytes());
+        Ok(ctx.stash(Executor::start(ctx, closure.into(), name)))
     })?;
 
     lua.execute::<()>(&exec)?;

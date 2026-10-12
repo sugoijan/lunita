@@ -15,7 +15,7 @@ fn callback() -> Result<(), ExternError> {
             stack.push_back(Value::Integer(42));
             Ok(CallbackReturn::Return)
         });
-        ctx.set_global("callback", callback);
+        ctx.set_global("callback", callback).unwrap();
         Ok(())
     })?;
 
@@ -47,7 +47,7 @@ fn tail_call_trivial_callback() -> Result<(), ExternError> {
             stack.push_back(Value::Integer(3));
             Ok(CallbackReturn::Return)
         });
-        ctx.set_global("callback", callback);
+        ctx.set_global("callback", callback).unwrap();
         Ok(())
     })?;
 
@@ -106,7 +106,7 @@ fn loopy_callback() -> Result<(), ExternError> {
                 then: Some(BoxSequence::new(&ctx, Cont(4))),
             })
         });
-        ctx.set_global("callback", callback);
+        ctx.set_global("callback", callback).unwrap();
         Ok(())
     })?;
 
@@ -196,7 +196,7 @@ fn yield_sequence() -> Result<(), ExternError> {
                 then: Some(BoxSequence::new(&ctx, Cont(0))),
             })
         });
-        ctx.set_global("callback", callback);
+        ctx.set_global("callback", callback).unwrap();
         Ok(())
     })?;
 

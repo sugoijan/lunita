@@ -1,0 +1,38 @@
+[package]
+name = "piccolo-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = "1"
+libfuzzer-sys = "0.4"
+peak_alloc = "0.3"
+piccolo = { path = ".." }
+
+# Not part of piccolo's workspace.
+[workspace]
+members = ["."]
+
+# Findings include overflows and failed debug assertions.
+[profile.release]
+debug = 1
+debug-assertions = true
+overflow-checks = true
+
+[[bin]]
+name = "chunk"
+path = "fuzz_targets/chunk.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "grammar"
+path = "fuzz_targets/grammar.rs"
+test = false
+doc = false
+bench = false
