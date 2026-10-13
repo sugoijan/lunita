@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  format:
+    name: Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      # The fuzz crate and the wasm harness are workspaces of their own.
+      - run: cargo fmt --all -- --check
+      - run: cargo fmt --all --manifest-path fuzz/Cargo.toml -- --check
+      - run: cargo fmt --all --manifest-path wasm-harness/Cargo.toml -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # The lints the library denies (unwrap, expect, panic, indexing, ...) are errors here;
+      # upstream's warnings are not, see docs/hardening-notes.md "Denied lints".
+      - run: cargo clippy --workspace --all-targets --all-features
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build all targets
+        run: cargo build --workspace --all-targets --all-features
+      - name: Test (debug, with overflow checks)
+        run: cargo test --workspace --all-features
+      - name: Test (release, with the limit cases' time gates)
+        run: cargo test --workspace --all-features --release
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --workspace --no-deps --all-features
+
+  msrv:
+    name: Minimum Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          # Keep in step with `rust-version` in Cargo.toml.
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets --all-features --locked
+      - run: cargo check --manifest-path wasm-harness/Cargo.toml --locked
+      - run: cargo check --manifest-path fuzz/Cargo.toml --locked
+
+  wasm:
+    name: Wasm harness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            wasm-harness
+      - name: Export the limit cases to target/limit-cases
+        run: cargo test --test limits -- --ignored export_cases
+      - name: Build the harness
+        run: cargo build --release --target wasm32-unknown-unknown
+        working-directory: wasm-harness
+      - name: Run the limit cases in wasm
+        run: node wasm-harness/run.mjs

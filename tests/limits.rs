@@ -2,8 +2,9 @@
 //! its expected outcome without exceeding the memory and time gates.
 //!
 //! Every case runs with `Limits { memory: Some(32 MiB), string_len: Some(1 MiB) }`, 1,000 fuel per
-//! `Executor::step`, the host stopping it after 2 s of steps, under a counting global allocator
-//! (`peak_alloc`, which counts both blocks of a `realloc`). Run in release for the time gates:
+//! `Executor::step`, the host stopping it after 2 s of steps (8 s in debug builds), under a
+//! counting global allocator (`peak_alloc`, which counts both blocks of a `realloc`). Run in
+//! release for the time gates:
 //!
 //! ```sh
 //! cargo test --release --test limits -- --nocapture
@@ -43,7 +44,9 @@ static ALLOCATOR: PeakAlloc = PeakAlloc;
 const MEMORY_LIMIT: usize = 32 << 20;
 const STRING_LIMIT: usize = 1 << 20;
 const FUEL_PER_STEP: i32 = 1_000;
-const HOST_STOP: Duration = Duration::from_secs(2);
+// Debug builds are several times slower, and the cases that reach a limit must still get there
+// before the host stops them (M3 needs about 1,000 steps).
+const HOST_STOP: Duration = Duration::from_secs(if cfg!(debug_assertions) { 8 } else { 2 });
 
 // The gates.
 // The real heap stays within the memory limit (see `Limits::memory`).
@@ -201,11 +204,13 @@ fn cases() -> Vec<Case> {
             &[Error, Limit],
         ),
         // Each level returns a value more than the one below: past the frame limit, the stack
-        // overflow unwinds quadratically, charged per value, so the host may stop it first.
+        // overflow (caught by the innermost `pcall`) unwinds quadratically, charged per value, so
+        // the host may stop it first; given the time (a debug build's longer stop) it ends
+        // normally, after about 630 million fuel.
         case(
             "C6",
             "local function f(n) return pcall(f, n + 1) end f(1)",
-            &[Error, Limit, HostStop],
+            &[Error, Limit, HostStop, Success],
         ),
         case(
             "C7",

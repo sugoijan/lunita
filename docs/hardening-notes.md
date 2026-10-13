@@ -25,7 +25,14 @@ what is still open.
   (`HeaderCallback`) only touches the memory accounting.
 - Everything is formatted by `rustfmt` with the 2024 style: `cargo fmt --all --check` passes in
   the workspace and, with `--manifest-path`, in `fuzz/` and `wasm-harness/` (their own
-  workspaces). CI checks all three.
+  workspaces). CI (`.github/workflows/ci.yml`, on pushes to master and pull requests) checks all
+  three, then clippy, the debug and release test suites, the docs with warnings denied, the
+  minimum Rust with the lockfiles, and the wasm harness.
+- A release is a `v<version>` tag on master, with the version bumped in `Cargo.toml` and a
+  `## lunita <version>` section at the top of CHANGELOG.md: `.github/workflows/release.yml`
+  publishes `lunita` and then `lunita-util` to crates.io (Trusted Publishing from this
+  repository, no stored token; a version already published is skipped) and makes the GitHub
+  release with that changelog section as its notes.
 - Behaviour that differs from PUC-Rio Lua may change to match it, and anything that already
   matches must keep matching; a difference kept on purpose is marked where it lives in the code
   with a comment holding `DELIBERATE(puc)` (pointing at COMPATIBILITY.md) or, for a cost-model
@@ -78,7 +85,8 @@ fuzz/update-seeds.sh                                  # refresh the fuzz seeds
 
 - `tests/limits.rs`: every limit case of the game's brief plus those found since (C12–C16, M12,
   M13, P4, P5, R1–R6, R3g–h), with `Limits { memory: 32 MiB, string_len: 1 MiB }`, 1,000 fuel a
-  step, a host stop after 2 s. Gates: outcome, peak real heap within the 32 MiB limit above the
+  step, a host stop after 2 s (8 s in debug builds, several times slower, so that the cases
+  reaching a limit still get there). Gates: outcome, peak real heap within the 32 MiB limit above the
   baseline, at most 300,000 fuel in a step (deterministic), and in release builds the time
   gates, as ratios to the time per fuel of a reference workload timed before each run of each
   case: the longest step (`Lua::enter` with one `Executor::step`, collection included) at most

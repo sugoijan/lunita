@@ -40,8 +40,8 @@ license.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
-# Upstream's CI and nix files, of no use to a host.
-exclude = [".circleci", ".envrc", "flake.nix", "flake.lock"]
+# CI and nix files, of no use to a host.
+exclude = [".github", ".envrc", "flake.nix", "flake.lock"]
 
 [dependencies]
 ahash.workspace = true

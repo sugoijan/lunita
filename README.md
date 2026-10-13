@@ -1,5 +1,6 @@
 [![crates.io](https://img.shields.io/crates/v/lunita)](https://crates.io/crates/lunita)
 [![docs.rs](https://docs.rs/lunita/badge.svg)](https://docs.rs/lunita)
+[![CI](https://github.com/sugoijan/lunita/actions/workflows/ci.yml/badge.svg)](https://github.com/sugoijan/lunita/actions/workflows/ci.yml)
 
 ## lunita - a stackless Lua VM in pure Rust, hardened for untrusted scripts
 
