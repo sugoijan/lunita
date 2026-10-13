@@ -1,13 +1,19 @@
 use std::{
     fmt,
     hash::{Hash, Hasher},
+    mem,
     pin::Pin,
 };
 
-use allocator_api2::boxed;
-use gc_arena::{allocator_api::MetricsAlloc, Collect, Gc, Mutation};
+use gc_arena::{
+    collect::{DynCollect, Trace},
+    Collect, Gc, Mutation,
+};
 
-use crate::{limits::Traced, Context, Error, Execution, Function, Stack, Thread};
+use crate::{
+    memory::{count_box, uncount_box, Queued, TrackedBytes},
+    Context, Error, Execution, Function, Stack, Thread,
+};
 
 /// Describes the next action for an [`Executor`](crate::Executor) to take after a callback has
 /// returned.
@@ -70,7 +76,7 @@ pub enum CallbackReturn<'gc> {
 ///
 /// All arguments and returns are handled through the provided `stack`, which avoids allocating
 /// space on the heap for them on each call.
-pub trait CallbackFn<'gc>: Collect {
+pub trait CallbackFn<'gc>: Collect<'gc> {
     fn call(
         &self,
         ctx: Context<'gc>,
@@ -103,20 +109,25 @@ impl<'gc> Callback<'gc> {
         }
 
         // SAFETY: We can't auto-implement `Collect` due to the function pointer lifetimes, but
-        // function pointers can't hold any data.
-        unsafe impl<'gc, C: Collect> Collect for HeaderCallback<'gc, C> {
-            fn needs_trace() -> bool
-            where
-                Self: Sized,
-            {
-                C::needs_trace()
-            }
+        // function pointers can't hold any data. `Drop` only touches the memory accounting, no
+        // `Gc` pointer.
+        unsafe impl<'gc, C: Collect<'gc>> Collect<'gc> for HeaderCallback<'gc, C> {
+            const NEEDS_TRACE: bool = C::NEEDS_TRACE;
 
-            fn trace(&self, cc: &gc_arena::Collection) {
-                self.callback.trace(cc)
+            fn trace<T: Trace<'gc>>(&self, cc: &mut T) {
+                cc.trace(&self.callback)
             }
         }
 
+        // The bytes of the heap block, counted for the memory limit (see `crate::memory`): a
+        // counting field cannot name a type with `C` in it.
+        impl<'gc, C> Drop for HeaderCallback<'gc, C> {
+            fn drop(&mut self) {
+                uncount_box::<Self>();
+            }
+        }
+
+        count_box::<HeaderCallback<'gc, C>>();
         let hc = Gc::new(
             mc,
             HeaderCallback {
@@ -152,7 +163,7 @@ impl<'gc> Callback<'gc> {
     /// Create a callback from a Rust function together with a GC object.
     pub fn from_fn_with<R, F>(mc: &Mutation<'gc>, root: R, call: F) -> Callback<'gc>
     where
-        R: 'gc + Collect,
+        R: 'gc + Collect<'gc>,
         F: 'static
             + Fn(
                 &R,
@@ -168,12 +179,12 @@ impl<'gc> Callback<'gc> {
             #[collect(require_static)]
             call: F,
             // Counts the callback for the memory limit's reserve if it may contain pointers.
-            queued: Option<Traced>,
+            queued: Option<Queued>,
         }
 
         impl<'gc, R, F> CallbackFn<'gc> for RootCallback<R, F>
         where
-            R: 'gc + Collect,
+            R: 'gc + Collect<'gc>,
             F: 'static
                 + Fn(
                     &R,
@@ -192,7 +203,7 @@ impl<'gc> Callback<'gc> {
             }
         }
 
-        let queued = R::needs_trace().then(Traced::new);
+        let queued = R::NEEDS_TRACE.then(Queued::new);
         Callback::new(mc, RootCallback { root, call, queued })
     }
 
@@ -287,7 +298,7 @@ pub enum SequencePoll<'gc> {
 /// [`SequencePoll`] values from [`Sequence::poll`]. Once the triggered action completes, either
 /// [`Sequence::poll`] or [`Sequence::error`] will be called, depending on whether the triggered
 /// action has completed successfully or errored.
-pub trait Sequence<'gc>: Collect {
+pub trait Sequence<'gc>: DynCollect<'gc> {
     /// Called by the running [`Executor`](crate::Executor) when the `Sequence` is first started
     /// with the arguments to the `Sequence`, and whenever a triggered action completes with the
     /// action's return values.
@@ -316,36 +327,44 @@ pub trait Sequence<'gc>: Collect {
     }
 }
 
+// `Sequence` is not dyn compatible through `Collect`, so the trait object is traced through
+// `DynCollect`.
+gc_arena::collect::dyn_collect!(dyn Sequence<'gc> + 'gc);
+
 /// A `Box` containing a value that implements [`Sequence`].
 ///
 /// We use a `Box` rather than `Gc` because a `Sequence` is mutable and not shared -- it is
 /// generally owned only by the `Thread` in which it is running.
-pub struct BoxSequence<'gc>(Pin<boxed::Box<dyn Sequence<'gc> + 'gc, MetricsAlloc<'static>>>);
+pub struct BoxSequence<'gc> {
+    sequence: Pin<Box<dyn Sequence<'gc> + 'gc>>,
+    // The bytes of the box, counted for the memory limit (see `crate::memory`).
+    _bytes: TrackedBytes,
+}
 
-unsafe impl<'gc> Collect for BoxSequence<'gc> {
-    fn trace(&self, cc: &gc_arena::Collection) {
+unsafe impl<'gc> Collect<'gc> for BoxSequence<'gc> {
+    fn trace<T: Trace<'gc>>(&self, cc: &mut T) {
         // SAFETY: We have to manually implement `Collect` for `BoxSequence<'gc>` because `gc-arena`
         // does not provide `Collect` impls for `Pin<T>`.
-        self.0.as_ref().get_ref().trace(cc);
+        cc.trace(self.sequence.as_ref().get_ref());
     }
 }
 
 impl<'gc> fmt::Debug for BoxSequence<'gc> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         fmt.debug_tuple("Sequence")
-            .field(&(self.0.as_ref().get_ref() as *const _))
+            .field(&(self.sequence.as_ref().get_ref() as *const _))
             .finish()
     }
 }
 
 impl<'gc> BoxSequence<'gc> {
     pub fn new(mc: &Mutation<'gc>, sequence: impl Sequence<'gc> + 'gc) -> Self {
-        let b = boxed::Box::new_in(sequence, MetricsAlloc::from_metrics(mc.metrics().clone()));
-        // TODO: Required unsafety due to do lack of `CoerceUnsized` on allocator_api2 `Box` type,
-        // replace with safe cast when one of allocator_api or CoerceUnsized is stabilized.
-        let (ptr, alloc) = boxed::Box::into_raw_with_allocator(b);
-        let b = unsafe { boxed::Box::from_raw_in(ptr as *mut dyn Sequence, alloc) };
-        Self(boxed::Box::into_pin(b))
+        let _ = mc;
+        let bytes = TrackedBytes::new(mem::size_of_val(&sequence));
+        Self {
+            sequence: Box::pin(sequence),
+            _bytes: bytes,
+        }
     }
 
     pub fn poll(
@@ -354,7 +373,7 @@ impl<'gc> BoxSequence<'gc> {
         exec: Execution<'gc, '_>,
         stack: Stack<'gc, '_>,
     ) -> Result<SequencePoll<'gc>, Error<'gc>> {
-        self.0.as_mut().poll(ctx, exec, stack)
+        self.sequence.as_mut().poll(ctx, exec, stack)
     }
 
     pub fn error(
@@ -364,6 +383,6 @@ impl<'gc> BoxSequence<'gc> {
         error: Error<'gc>,
         stack: Stack<'gc, '_>,
     ) -> Result<SequencePoll<'gc>, Error<'gc>> {
-        self.0.as_mut().error(ctx, exec, error, stack)
+        self.sequence.as_mut().error(ctx, exec, error, stack)
     }
 }

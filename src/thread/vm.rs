@@ -1,9 +1,7 @@
-use allocator_api2::vec;
-use gc_arena::allocator_api::MetricsAlloc;
-
 use crate::{
     compat::Compat,
     constant::f64_to_i64,
+    memory::TrackedVec,
     meta_ops::{self, ConcatMetaResult, MetaResult},
     opcode::{Operation, RCIndex},
     thread::thread::MetaReturn,
@@ -241,7 +239,7 @@ pub(super) fn run_vm<'gc>(
                     .prototypes
                     .get(proto.0 as usize)
                     .ok_or(VMError::BadPrototype)?;
-                let mut upvalues = vec::Vec::new_in(MetricsAlloc::new(&ctx));
+                let mut upvalues = TrackedVec::new();
                 for &desc in proto.upvalues.iter() {
                     match desc {
                         UpValueDescriptor::Environment => {

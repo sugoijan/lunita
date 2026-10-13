@@ -11,6 +11,7 @@ default-members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.85"
 authors = ["すごいジャン <me@sugoijan.dev>", "kyren <catherine@kyju.org>"]
 license = "MIT"
 repository = "https://github.com/sugoijan/lunita"
@@ -18,10 +19,9 @@ repository = "https://github.com/sugoijan/lunita"
 [workspace.dependencies]
 # Without `runtime-rng`, which needs `getrandom` (and JS imports on wasm32-unknown-unknown).
 ahash = { version = "0.8", default-features = false, features = ["std"] }
-allocator-api2 = "0.2"
 anyhow = "1.0"
-gc-arena = { git = "https://github.com/kyren/gc-arena", rev = "5a7534b883b703f23cfb8c3cfdf033460aa77ea9", features = ["allocator-api2", "hashbrown"] }
-hashbrown = { version = "0.14", features = ["raw"] }
+gc-arena = { version = "0.7", features = ["hashbrown"] }
+hashbrown = { version = "0.17", default-features = false, features = ["inline-more"] }
 serde = "1.0"
 thiserror = "1.0"
 
@@ -39,7 +39,6 @@ repository.workspace = true
 
 [dependencies]
 ahash.workspace = true
-allocator-api2.workspace = true
 anyhow.workspace = true
 gc-arena.workspace = true
 hashbrown.workspace = true

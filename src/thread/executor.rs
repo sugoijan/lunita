@@ -1,14 +1,14 @@
 use std::hash::{Hash, Hasher};
 
-use allocator_api2::vec;
-use gc_arena::{allocator_api::MetricsAlloc, lock::RefLock, Collect, Gc, Mutation};
+use gc_arena::{lock::RefLock, Collect, Gc, Mutation};
 use thiserror::Error;
 
 use crate::{
     compiler::{FunctionRef, LineNumber},
     error::LibraryError,
     fuel::{cost, fuel_for},
-    limits::{LimitError, Written},
+    limits::LimitError,
+    memory::{TrackedVec, Written},
     thread::BadThreadMode,
     CallbackReturn, Context, Error, FromMultiValue, Fuel, Function, IntoMultiValue, SequencePoll,
     Stack, String, Thread, ThreadMode, Value, Variadic,
@@ -45,8 +45,8 @@ pub struct BadExecutorMode {
 #[derive(Debug, Collect)]
 #[collect(no_drop)]
 pub struct ExecutorState<'gc> {
-    thread_stack: vec::Vec<Thread<'gc>, MetricsAlloc<'gc>>,
-    queued: Written,
+    thread_stack: TrackedVec<Thread<'gc>>,
+    queued: Written<RefLock<ExecutorState<'static>>>,
 }
 
 pub type ExecutorInner<'gc> = RefLock<ExecutorState<'gc>>;
@@ -101,7 +101,7 @@ impl<'gc> Executor<'gc> {
 
     // Creates an executor running the given thread, which must not be `Waiting` or `Running`.
     fn with_thread(mc: &Mutation<'gc>, thread: Thread<'gc>) -> Self {
-        let mut thread_stack = vec::Vec::new_in(MetricsAlloc::new(mc));
+        let mut thread_stack = TrackedVec::new();
         thread_stack.push(thread);
         Executor(Gc::new(
             mc,
@@ -658,10 +658,7 @@ impl<'gc> Executor<'gc> {
 
 // Resets every thread of a stopped executor (none can be running) and keeps its main thread: a
 // coroutine left waiting on another would stay unresumable otherwise.
-fn reset_threads<'gc>(
-    mc: &Mutation<'gc>,
-    thread_stack: &mut vec::Vec<Thread<'gc>, MetricsAlloc<'gc>>,
-) {
+fn reset_threads<'gc>(mc: &Mutation<'gc>, thread_stack: &mut TrackedVec<Thread<'gc>>) {
     for thread in thread_stack.iter().rev() {
         let _ = thread.reset(mc);
     }
@@ -688,7 +685,7 @@ const RUNNING: BadThreadMode = BadThreadMode {
 
 fn do_yield<'gc>(
     ctx: Context<'gc>,
-    thread_stack: &mut vec::Vec<Thread<'gc>, MetricsAlloc<'gc>>,
+    thread_stack: &mut TrackedVec<Thread<'gc>>,
     top_state: &mut ThreadState<'gc>,
     to_thread: Option<Thread<'gc>>,
     bottom: usize,
@@ -710,7 +707,7 @@ fn do_yield<'gc>(
 
 fn do_resume<'gc>(
     ctx: Context<'gc>,
-    thread_stack: &mut vec::Vec<Thread<'gc>, MetricsAlloc<'gc>>,
+    thread_stack: &mut TrackedVec<Thread<'gc>>,
     top_state: &mut ThreadState<'gc>,
     thread: Thread<'gc>,
     bottom: usize,
@@ -739,7 +736,7 @@ fn return_to<'gc>(ctx: Context<'gc>, top_state: &mut ThreadState<'gc>, bottom: u
 // result. Returns the fuel for the work this took (dropping every frame).
 fn abort<'gc>(
     mc: &Mutation<'gc>,
-    thread_stack: &mut vec::Vec<Thread<'gc>, MetricsAlloc<'gc>>,
+    thread_stack: &mut TrackedVec<Thread<'gc>>,
     error: crate::LimitError,
 ) -> i32 {
     let mut frames = thread_stack.len();

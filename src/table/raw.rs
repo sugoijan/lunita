@@ -5,14 +5,14 @@ use std::{
     mem,
 };
 
-use allocator_api2::vec;
-use gc_arena::{allocator_api::MetricsAlloc, Collect, Gc, Mutation};
-use hashbrown::HashTable;
+use gc_arena::{Collect, Gc, Mutation};
 use thiserror::Error;
 
 use crate::{
-    constant::f64_to_i64, hash::HashKeys, Callback, Closure, Function, LimitError, String, Table,
-    Thread, UserData, Value,
+    constant::f64_to_i64,
+    hash::HashKeys,
+    memory::{TrackedTable, TrackedVec},
+    Callback, Closure, Function, LimitError, String, Table, Thread, UserData, Value,
 };
 
 #[derive(Debug, Copy, Clone, Error)]
@@ -74,10 +74,10 @@ pub enum NextValue<'gc> {
 #[derive(Collect)]
 #[collect(no_drop)]
 pub struct RawTable<'gc> {
-    array: vec::Vec<Value<'gc>, MetricsAlloc<'gc>>,
-    entries: vec::Vec<(Key<'gc>, Value<'gc>), MetricsAlloc<'gc>>,
+    array: TrackedVec<Value<'gc>>,
+    entries: TrackedVec<(Key<'gc>, Value<'gc>)>,
     // The position in `entries` of each entry, hashed by its key.
-    index: HashTable<usize, MetricsAlloc<'gc>>,
+    index: TrackedTable<usize>,
     // The number of entries with a nil value.
     #[collect(require_static)]
     removed: usize,
@@ -149,11 +149,12 @@ impl<'gc> RawTable<'gc> {
         hash_builder: ahash::random_state::RandomState,
         hash_generation: u64,
     ) -> Self {
-        let mut array = vec::Vec::new_in(MetricsAlloc::new(mc));
+        let _ = mc;
+        let mut array = TrackedVec::new();
         array.resize(array_capacity, Value::Nil);
 
-        let entries = vec::Vec::with_capacity_in(map_capacity, MetricsAlloc::new(mc));
-        let index = HashTable::with_capacity_in(map_capacity, MetricsAlloc::new(mc));
+        let entries = TrackedVec::with_capacity(map_capacity);
+        let index = TrackedTable::with_capacity(map_capacity);
 
         Self {
             array,
@@ -212,23 +213,26 @@ impl<'gc> RawTable<'gc> {
     // Rebuilds the index of the map part, returning the number of entries indexed. Entries with dead
     // keys are left out (see `unindexed`).
     fn rebuild_index(&mut self) -> usize {
-        self.index.clear();
-        self.unindexed = false;
         let (entries, hash_builder) = (&self.entries, &self.hash_builder);
         let hasher = entry_hasher(entries, hash_builder);
-        // The index only grows here, after `reserve_map_inner` grew `entries` (and checked the
-        // memory for both); `rekey` finds it already large enough.
-        self.index.reserve(entries.capacity(), &hasher);
-        let mut indexed = 0;
-        for (i, (key, _)) in entries.iter().enumerate() {
-            if let Some(key) = key.live_key() {
-                self.index
-                    .insert_unique(hash_builder.hash_one(key), i, &hasher);
-                indexed += 1;
-            } else {
-                self.unindexed = true;
+        let mut unindexed = false;
+        let indexed = self.index.update(|index| {
+            index.clear();
+            // The index only grows here, after `reserve_map_inner` grew `entries` (and checked
+            // the memory for both); `rekey` finds it already large enough.
+            index.reserve(entries.capacity(), &hasher);
+            let mut indexed = 0;
+            for (i, (key, _)) in entries.iter().enumerate() {
+                if let Some(key) = key.live_key() {
+                    index.insert_unique(hash_builder.hash_one(key), i, &hasher);
+                    indexed += 1;
+                } else {
+                    unindexed = true;
+                }
             }
-        }
+            indexed
+        });
+        self.unindexed = unindexed;
         indexed
     }
 
@@ -354,11 +358,13 @@ impl<'gc> RawTable<'gc> {
         let i = self.entries.len();
         self.entries.push((Key::Live(table_key), value));
         let (entries, hash_builder) = (&self.entries, &self.hash_builder);
-        self.index.insert_unique(
-            hash_builder.hash_one(table_key),
-            i,
-            entry_hasher(entries, hash_builder),
-        );
+        self.index.update(|index| {
+            index.insert_unique(
+                hash_builder.hash_one(table_key),
+                i,
+                entry_hasher(entries, hash_builder),
+            );
+        });
         Ok(Value::Nil)
     }
 

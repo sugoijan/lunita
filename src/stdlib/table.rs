@@ -158,7 +158,7 @@ enum Access<'gc> {
 }
 
 impl<'gc> TableOp<'gc> {
-    fn new(ctx: Context<'gc>, table: Table<'gc>, kind: OpKind, raw: bool) -> Self {
+    fn new(table: Table<'gc>, kind: OpKind, raw: bool) -> Self {
         TableOp {
             table,
             kind,
@@ -171,7 +171,7 @@ impl<'gc> TableOp<'gc> {
             step: 1,
             base: 0,
             separator: None,
-            output: ByteBuffer::new(&ctx),
+            output: ByteBuffer::new(),
         }
     }
 
@@ -552,7 +552,7 @@ fn table_insert<'gc>(
         }
     }
 
-    let mut op = TableOp::new(ctx, table, OpKind::Insert, raw);
+    let mut op = TableOp::new(table, OpKind::Insert, raw);
     op.position = position;
     op.value = value;
     run_op(ctx, exec, stack, op)
@@ -586,7 +586,7 @@ fn table_remove<'gc>(
         }
     }
 
-    let mut op = TableOp::new(ctx, table, OpKind::Remove, raw);
+    let mut op = TableOp::new(table, OpKind::Remove, raw);
     op.position = position;
     run_op(ctx, exec, stack, op)
 }
@@ -605,7 +605,7 @@ fn table_concat<'gc>(
     let last = opt_int(ctx, &stack, "concat", 3)?;
     stack.clear();
 
-    let mut op = TableOp::new(ctx, table, OpKind::Concat, is_raw(ctx, table));
+    let mut op = TableOp::new(table, OpKind::Concat, is_raw(ctx, table));
     op.separator = separator;
     op.next = first;
     op.position = last;

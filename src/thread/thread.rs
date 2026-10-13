@@ -4,17 +4,14 @@ use std::{
     mem,
 };
 
-use allocator_api2::vec;
-use gc_arena::{
-    allocator_api::MetricsAlloc, lock::RefLock, Collect, Finalization, Gc, GcWeak, Mutation,
-};
+use gc_arena::{lock::RefLock, Collect, Finalization, Gc, GcWeak, Mutation};
 use thiserror::Error;
 
 use crate::{
     closure::{UpValue, UpValueState},
     compat::Compat,
     fuel::{cost, count_fuel, fuel_for},
-    limits::Written,
+    memory::{TrackedVec, Written},
     meta_ops, stack,
     table::{Growth, TableError},
     types::{RegisterIndex, VarCount},
@@ -95,9 +92,9 @@ impl<'gc> Thread<'gc> {
         let p = Gc::new(
             &ctx,
             RefLock::new(ThreadState {
-                frames: vec::Vec::new_in(MetricsAlloc::new(&ctx)),
-                stack: vec::Vec::new_in(MetricsAlloc::new(&ctx)),
-                open_upvalues: vec::Vec::new_in(MetricsAlloc::new(&ctx)),
+                frames: TrackedVec::new(),
+                stack: TrackedVec::new(),
+                open_upvalues: TrackedVec::new(),
                 queued: Written::new(),
             }),
         );
@@ -401,10 +398,10 @@ pub(super) enum Frame<'gc> {
 #[derive(Debug, Collect)]
 #[collect(no_drop)]
 pub struct ThreadState<'gc> {
-    pub(super) frames: vec::Vec<Frame<'gc>, MetricsAlloc<'gc>>,
-    pub(super) stack: vec::Vec<Value<'gc>, MetricsAlloc<'gc>>,
-    pub(super) open_upvalues: vec::Vec<UpValue<'gc>, MetricsAlloc<'gc>>,
-    queued: Written,
+    pub(super) frames: TrackedVec<Frame<'gc>>,
+    pub(super) stack: TrackedVec<Value<'gc>>,
+    pub(super) open_upvalues: TrackedVec<UpValue<'gc>>,
+    queued: Written<RefLock<ThreadState<'static>>>,
 }
 
 impl<'gc> ThreadState<'gc> {
@@ -1165,7 +1162,7 @@ pub(super) struct LuaRegisters<'gc, 'a> {
     upper_stack: &'a mut [Value<'gc>],
     bottom: usize,
     base: usize,
-    open_upvalues: &'a mut vec::Vec<UpValue<'gc>, MetricsAlloc<'gc>>,
+    open_upvalues: &'a mut TrackedVec<UpValue<'gc>>,
     thread: Thread<'gc>,
 }
 

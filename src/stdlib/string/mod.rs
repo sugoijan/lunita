@@ -20,7 +20,8 @@ use crate::{
     compat,
     compiler::string_utils::c_str,
     fuel::{cost, fuel_for},
-    limits::{ByteBuffer, Written},
+    limits::ByteBuffer,
+    memory::Written,
     meta_ops::{self, MetaResult},
     BoxSequence, Callback, CallbackReturn, Context, Error, Execution, Fuel, Function, LimitError,
     Sequence, SequencePoll, Stack, String, Table, Value,
@@ -580,7 +581,7 @@ struct GmatchState<'gc> {
     // The end of the last match (Lua 5.4 does not match an empty string there).
     #[collect(require_static)]
     last_match: Option<usize>,
-    queued: Written,
+    queued: Written<RefLock<GmatchState<'static>>>,
 }
 
 type GmatchRef<'gc> = Gc<'gc, RefLock<GmatchState<'gc>>>;
@@ -953,7 +954,7 @@ fn str_gsub<'gc>(
         position: 0,
         copied: 0,
         last_match: None,
-        output: ByteBuffer::new(&ctx),
+        output: ByteBuffer::new(),
         pending: None,
         done: false,
     };

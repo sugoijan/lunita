@@ -18,7 +18,9 @@ what is still open.
 - Every experiment with untrusted input runs under `scripts/wd.sh <seconds> <command>`, a
   watchdog that kills the command above 2 GB of RSS or after the time limit.
 - No new `unsafe`: the tree has fewer `unsafe` lines than upstream (the insertion-ordered tables
-  deleted three blocks), and every remaining block reads as upstream's.
+  deleted three blocks, the gc-arena 0.7 port the sequence box's cast), and every remaining block
+  reads as upstream's. The one `Drop` on a manually collected type (`HeaderCallback`) only
+  touches the memory accounting.
 - Behaviour that differs from PUC-Rio Lua may change to match it, and anything that already
   matches must keep matching; a difference kept on purpose is marked where it lives in the code
   with a comment holding `DELIBERATE(puc)` (pointing at COMPATIBILITY.md) or, for a cost-model
@@ -165,6 +167,26 @@ and 0.024 µs at opt-level z.
 
 ## Notes for gc-arena and open decisions
 
+- **gc-arena 0.7 counts objects, not bytes**, so lunita counts the bytes itself (`src/memory.rs`;
+  piccolo pinned an unreleased revision between 0.5.3 and 0.6.0, whose `MetricsAlloc` and
+  external allocation tracking 0.6 removed, and crates.io refuses git dependencies). Every value
+  a `Gc` points to carries a zero-sized field (`Traced<T>`, `Written<T>` or `Boxed<T>`, named
+  with the boxed type at `'static`, since the field is `require_static`) that adds the size of its
+  heap block (two pointers of header, then the value at its alignment) when it is made and
+  removes it in `Drop`, through the thread-local accounting the mark-queue reserve already used;
+  callbacks and userdata, whose boxed types carry a type parameter, count by hand (a `Drop` on
+  `HeaderCallback`, a `TrackedBytes` field in `any::Value`). The storage values own is in
+  `TrackedVec<T>` (a `Vec` recounted after every method that may change its capacity),
+  `TrackedTable<T>` (a hashbrown `HashTable` recounted after `update`) and `TrackedBytes` (a
+  count with `Drop`, for buffers and the bytes of owned strings); none of them needs `unsafe`,
+  and the `BoxSequence` cast that `allocator-api2`'s `Box` needed is gone. Static strings and the
+  function lists of composed functions, which only the host makes, are not counted. The limits
+  harness checks the real peak heap against the count on every case (`peak_alloc`).
+  The collector is paced in objects: every `Lua::enter` turns the storage bytes allocated since
+  the last one into debt at the heap's average bytes per object (`Metrics::adjust_debt`), the
+  near-limit pacing is `sleep_factor` 0 with the work factors divided by four, and the debt is
+  reset after a whole collection (gc-arena only resets it when a cycle ran in one call from
+  sleeping, which left idle `Lua::enter` calls collecting ten times over).
 - **Mark queues are untracked, and lunita reserves room for them.** gc-arena keeps the objects
   it has yet to trace in two `Vec`s outside `Metrics` that never shrink: `gray` takes white
   objects as they are reached, `gray_again` black objects written to during marking. An object is
@@ -186,10 +208,11 @@ and 0.024 µs at opt-level z.
 - **Garbage counts against the memory limit** until it is collected, and gc-arena can only collect
   between `Lua::enter` calls, so lunita cannot collect at the moment it would refuse an
   allocation. It paces the collector by the limit: once the heap passes a quarter of the limit,
-  each cycle starts as soon as the last one ends and collects five bytes for each byte allocated
-  (gc-arena's default waits for the heap to grow by half and collects one and two thirds of a
-  byte per byte). That keeps a script whose live data stays under half the limit under about
-  25 MiB of a 32 MiB limit whatever garbage it makes (limit cases R3a–f). With more live data the
+  each cycle starts as soon as the last one ends and the collector works four times as fast
+  (gc-arena's default waits for the heap to grow by half of what the last cycle kept, and does
+  one unit of work for a little under two of debt). That keeps a script whose live data stays
+  under half the limit under about 25 MiB of a 32 MiB limit whatever garbage it makes (limit
+  cases R3a–f). With more live data the
   incremental collector can still fall behind, so once the memory counted against the limit
   passes three quarters of it, the next `Lua::enter` first finishes a collection outside the
   mutation (a cycle already sweeping only frees what was garbage when it started marking, so a
@@ -198,9 +221,9 @@ and 0.024 µs at opt-level z.
   25 MiB, which takes 2–3.5 ms natively), and due again once the memory has grown by half of the
   room the last one left, a 32nd of the limit at least (R3g: 90,000 tables live and 512 KiB
   strings of garbage, R3h: 22 MiB of strings live, both refused before, now host stops).
-  gc-arena estimates the external memory a cycle has traced as an even share per object, which
-  overrates the progress of a cycle when a few objects own most of the memory; the faster pacing
-  and the collection near the limit make up for it.
+  The collector's work is per object, so a few objects owning most of the memory (long strings,
+  big tables) are cheap to collect but the debt for their storage is paid slowly; the faster
+  pacing and the collection near the limit make up for it.
 - **Thread stacks grow by half** instead of doubling (still checking the whole new capacity
   against the limit): the blocks a doubling stack leaves behind never fit the next one, so wasm's
   allocator grew by their sum (C15 grew the wasm memory by 39.75 MiB, now 27.94).

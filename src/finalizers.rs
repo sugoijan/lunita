@@ -1,9 +1,6 @@
-use allocator_api2::vec;
-use gc_arena::{
-    allocator_api::MetricsAlloc, lock::RefLock, Collect, Finalization, Gc, GcWeak, Mutation,
-};
+use gc_arena::{lock::RefLock, Collect, Finalization, Gc, GcWeak, Mutation};
 
-use crate::{thread::ThreadInner, Thread};
+use crate::{memory::TrackedVec, thread::ThreadInner, Thread};
 
 #[derive(Copy, Clone, Collect)]
 #[collect(no_drop)]
@@ -16,7 +13,7 @@ impl<'gc> Finalizers<'gc> {
         Finalizers(Gc::new(
             mc,
             RefLock::new(FinalizersState {
-                threads: vec::Vec::new_in(MetricsAlloc::new(mc)),
+                threads: TrackedVec::new(),
             }),
         ))
     }
@@ -73,5 +70,5 @@ impl<'gc> Finalizers<'gc> {
 #[derive(Collect)]
 #[collect(no_drop)]
 struct FinalizersState<'gc> {
-    threads: vec::Vec<GcWeak<'gc, ThreadInner<'gc>>, MetricsAlloc<'gc>>,
+    threads: TrackedVec<GcWeak<'gc, ThreadInner<'gc>>>,
 }

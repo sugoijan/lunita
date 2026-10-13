@@ -10,7 +10,9 @@ use gc_arena::{
     Collect, Gc, Mutation, Rootable,
 };
 
-/// A `Gc` pointer to any type `T: Collect + 'gc` which allows safe downcasting.
+use crate::memory::{box_size, TrackedBytes};
+
+/// A `Gc` pointer to any type `T: Collect<'gc> + 'gc` which allows safe downcasting.
 ///
 /// The optional `M` metadata parameter provides a way of including statically typed metadata along
 /// with the dynamically typed value.
@@ -64,6 +66,8 @@ pub struct AnyInner<M> {
 struct Value<M, V> {
     header: AnyInner<M>,
     value: V,
+    // The bytes of the heap block, counted for the memory limit (see `crate::memory`).
+    bytes: TrackedBytes,
 }
 
 impl<'gc, M> fmt::Debug for Any<'gc, M>
@@ -104,18 +108,18 @@ impl<'gc, M> Clone for Any<'gc, M> {
 impl<'gc, M> Any<'gc, M> {
     pub fn new<R>(mc: &Mutation<'gc>, data: Root<'gc, R>) -> Self
     where
-        M: Collect + Default,
+        M: Collect<'gc> + Default,
         R: for<'a> Rootable<'a> + 'static,
-        Root<'gc, R>: Sized + Collect,
+        Root<'gc, R>: Sized + Collect<'gc>,
     {
         Self::with_metadata::<R>(mc, M::default(), data)
     }
 
     pub fn with_metadata<R>(mc: &Mutation<'gc>, metadata: M, data: Root<'gc, R>) -> Self
     where
-        M: Collect,
+        M: Collect<'gc>,
         R: for<'a> Rootable<'a> + 'static,
-        Root<'gc, R>: Sized + Collect,
+        Root<'gc, R>: Sized + Collect<'gc>,
     {
         let val = Gc::new(
             mc,
@@ -125,6 +129,7 @@ impl<'gc, M> Any<'gc, M> {
                     type_id: TypeId::of::<R>(),
                 },
                 value: data,
+                bytes: TrackedBytes::new(box_size::<Value<M, Root<'gc, R>>>()),
             },
         );
 

@@ -7,14 +7,14 @@ use std::{
 
 use ahash::AHasher;
 use gc_arena::{
-    allocator_api::MetricsAlloc, barrier::Unlock, lock::RefLock, metrics::Metrics, Collect,
-    Collection, Gc, GcWeak, Mutation, Static,
+    barrier::Unlock, collect::Trace, lock::RefLock, Collect, Gc, GcWeak, Mutation, Static,
 };
-use hashbrown::{hash_map, raw::RawTable, HashMap};
+use hashbrown::{hash_map, HashMap};
 
 use crate::{
     compiler::string_utils::{debug_utf8_lossy, display_utf8_lossy},
     hash::{HashKeys, HashState},
+    memory::{count_bytes, uncount_bytes, Boxed, TrackedTable},
     table::Growth,
 };
 
@@ -76,14 +76,16 @@ impl<'gc> String<'gc> {
         #[repr(C)]
         struct Owned {
             header: StringInner,
-            metrics: Metrics,
+            // Counts the heap block; the buffer is counted by hand, as its length is only known
+            // through the pointer.
+            boxed: Boxed<Owned>,
         }
 
         impl Drop for Owned {
             fn drop(&mut self) {
                 match self.header.buffer {
                     Buffer::Indirect(ptr) => unsafe {
-                        self.metrics.mark_external_deallocation(ptr.len());
+                        uncount_bytes(ptr.len());
                         drop(Box::from_raw(ptr as *mut [u8]));
                     },
                     // `Owned` strings are always indirect.
@@ -92,14 +94,13 @@ impl<'gc> String<'gc> {
             }
         }
 
-        let metrics = mc.metrics().clone();
-        metrics.mark_external_allocation(s.len());
+        count_bytes(s.len());
         let owned = Owned {
             header: StringInner {
                 hash,
                 buffer: Buffer::Indirect(Box::into_raw(s)),
             },
-            metrics,
+            boxed: Boxed::new(),
         };
         // SAFETY: We know we can cast to `StringInner` because `Owned` is `#[repr(C)]`
         String(unsafe { Gc::cast::<StringInner>(Gc::new(mc, owned)) })
@@ -118,6 +119,9 @@ impl<'gc> String<'gc> {
             struct InlineString<const N: usize> {
                 header: StringInner,
                 array: [u8; N],
+                // Counts the heap block (zero-sized, so `String::as_bytes` finds `array` where
+                // it expects it).
+                boxed: Boxed<InlineString<N>>,
             }
 
             assert!(s.len() <= N);
@@ -127,6 +131,7 @@ impl<'gc> String<'gc> {
                     buffer: Buffer::Inline(s.len()),
                 },
                 array: [0; N],
+                boxed: Boxed::new(),
             };
             string.array[0..s.len()].copy_from_slice(s);
 
@@ -269,28 +274,20 @@ impl<'gc> Hash for String<'gc> {
     }
 }
 
-struct InternedDynStringsInner<'gc>(
-    RefLock<RawTable<(GcWeak<'gc, StringInner>, u64), MetricsAlloc<'gc>>>,
-);
+struct InternedDynStringsInner<'gc>(RefLock<TrackedTable<(GcWeak<'gc, StringInner>, u64)>>);
 
 #[derive(Copy, Clone, Collect)]
 #[collect(no_drop)]
 struct InternedDynStrings<'gc>(Gc<'gc, InternedDynStringsInner<'gc>>);
 
-unsafe impl<'gc> Collect for InternedDynStringsInner<'gc> {
-    fn trace(&self, cc: &Collection) {
+unsafe impl<'gc> Collect<'gc> for InternedDynStringsInner<'gc> {
+    fn trace<T: Trace<'gc>>(&self, cc: &mut T) {
         // SAFETY: No new Gc pointers are adopted or reparented.
         let mut dyn_strings = unsafe { self.0.unlock_unchecked() }.borrow_mut();
-        unsafe {
-            for bucket in dyn_strings.iter() {
-                let s = bucket.as_ref().0;
-                if s.is_dropped(cc) {
-                    // SAFETY: it is okay to erase items yielded by the iterator.
-                    dyn_strings.erase(bucket);
-                } else {
-                    s.trace(cc);
-                }
-            }
+        // The entries of strings the last cycle freed are dropped here, as they are found.
+        dyn_strings.update(|table| table.retain(|(s, _)| !s.is_dropped()));
+        for (s, _) in dyn_strings.iter() {
+            cc.trace(s);
         }
     }
 }
@@ -299,7 +296,7 @@ impl<'gc> InternedDynStrings<'gc> {
     fn new(mc: &Mutation<'gc>) -> Self {
         Self(Gc::new(
             mc,
-            InternedDynStringsInner(RefLock::new(RawTable::new_in(MetricsAlloc::new(mc)))),
+            InternedDynStringsInner(RefLock::new(TrackedTable::with_capacity(0))),
         ))
     }
 
@@ -322,26 +319,26 @@ impl<'gc> InternedDynStrings<'gc> {
         // SAFETY: If a new string is added, we call the write barrier.
         let mut dyn_strings = unsafe { self.0 .0.unlock_unchecked() }.borrow_mut();
 
-        // SAFETY: The RawTable outlives the iterator
-        unsafe {
-            for bucket in dyn_strings.iter_hash(hash) {
-                let (key, _) = *bucket.as_ref();
-                if let Some(st) = key.upgrade(mc).map(String::from_inner) {
-                    if st == s.as_ref() {
-                        return st;
-                    }
-                } else {
-                    // SAFETY: it is okay to erase items yielded by the iterator.
-                    dyn_strings.erase(bucket);
-                }
+        // The entries of freed strings are skipped here and dropped at the next collection.
+        if let Some(&(key, _)) = dyn_strings.find(hash, |&(key, _)| {
+            key.upgrade(mc)
+                .is_some_and(|st| String::from_inner(st) == s.as_ref())
+        }) {
+            if let Some(st) = key.upgrade(mc) {
+                return String::from_inner(st);
             }
         }
 
         let len = dyn_strings.len();
         if len == dyn_strings.capacity() {
-            // The table will grow (to at least double the buckets) and rehash its entries, or
-            // rehash in place after removals; the growth is charged as the worst case.
-            let buckets = dyn_strings.buckets().saturating_mul(2).max(4);
+            // The table will grow (to at least double the buckets, rounded up to a power of two
+            // with a load factor of 7/8) and rehash its entries, or rehash in place after
+            // removals; the growth is charged as the worst case.
+            let buckets = (dyn_strings.capacity().saturating_mul(2).max(4))
+                .saturating_mul(8)
+                .checked_div(7)
+                .and_then(usize::checked_next_power_of_two)
+                .unwrap_or(usize::MAX);
             let growth = Growth {
                 bytes: buckets
                     .saturating_mul(mem::size_of::<(GcWeak<'gc, StringInner>, u64)>() + 1)
@@ -357,11 +354,13 @@ impl<'gc> InternedDynStrings<'gc> {
         Gc::write(mc, self.0);
 
         let s = create(mc, s);
-        dyn_strings.insert(
-            s.stored_hash(),
-            (Gc::downgrade(s.into_inner()), s.stored_hash()),
-            |(_, hash)| *hash,
-        );
+        dyn_strings.update(|table| {
+            table.insert_unique(
+                s.stored_hash(),
+                (Gc::downgrade(s.into_inner()), s.stored_hash()),
+                |(_, hash)| *hash,
+            );
+        });
 
         s
     }
@@ -370,27 +369,14 @@ impl<'gc> InternedDynStrings<'gc> {
 #[derive(Copy, Clone, Collect)]
 #[collect(no_drop)]
 struct InternedStaticStrings<'gc>(
-    Gc<
-        'gc,
-        RefLock<
-            HashMap<
-                Static<*const [u8]>,
-                String<'gc>,
-                BuildHasherDefault<AHasher>,
-                MetricsAlloc<'gc>,
-            >,
-        >,
-    >,
+    Gc<'gc, RefLock<HashMap<Static<*const [u8]>, String<'gc>, BuildHasherDefault<AHasher>>>>,
 );
 
 impl<'gc> InternedStaticStrings<'gc> {
     fn new(mc: &Mutation<'gc>) -> Self {
         Self(Gc::new(
             mc,
-            RefLock::new(HashMap::with_hasher_in(
-                BuildHasherDefault::default(),
-                MetricsAlloc::new(mc),
-            )),
+            RefLock::new(HashMap::with_hasher(BuildHasherDefault::default())),
         ))
     }
 

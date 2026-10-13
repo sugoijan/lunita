@@ -77,7 +77,7 @@ impl<'gc> UserData<'gc> {
     pub fn new<R>(mc: &Mutation<'gc>, val: Root<'gc, R>) -> Self
     where
         R: for<'a> Rootable<'a> + 'static,
-        Root<'gc, R>: Sized + Collect,
+        Root<'gc, R>: Sized + Collect<'gc>,
     {
         UserData(Any::new::<R>(mc, val))
     }

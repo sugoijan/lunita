@@ -11,7 +11,8 @@ use crate::{
     compat::{Compat, Settings},
     finalizers::Finalizers,
     fuel::{cost, fuel_for},
-    limits::{self, CountObjects, LimitError, LimitState, Limits, QueuedObjects},
+    limits::{self, LimitError, LimitState, Limits},
+    memory::{Accounted, Accounting},
     stash::{Fetchable, Stashable},
     stdlib::{load_base, load_coroutine, load_io, load_math, load_string, load_table},
     string::InternedStringSet,
@@ -100,7 +101,7 @@ impl<'gc> Context<'gc> {
     pub fn singleton<S>(self) -> &'gc Root<'gc, S>
     where
         S: for<'a> Rootable<'a> + 'static,
-        Root<'gc, S>: Sized + Singleton<'gc> + Collect,
+        Root<'gc, S>: Sized + Singleton<'gc> + Collect<'gc>,
     {
         self.state.registry.singleton::<S>(self)
     }
@@ -201,14 +202,17 @@ impl<'gc> Context<'gc> {
     pub fn check_memory(self, additional: usize) -> Result<(), LimitError> {
         self.state
             .limits
-            .check_memory(self.metrics().total_allocation(), additional)
+            .check_memory(self.total_memory(), additional)
     }
 
     /// The bytes that may still be allocated within the memory limit, if there is one.
     pub fn memory_room(self) -> Option<usize> {
-        self.state
-            .limits
-            .memory_room(self.metrics().total_allocation())
+        self.state.limits.memory_room(self.total_memory())
+    }
+
+    /// The bytes the instance counts against the memory limit, as [`Lua::total_memory`] does.
+    pub fn total_memory(self) -> usize {
+        self.state.limits.accounting().bytes()
     }
 
     /// Checks that a string of `len` bytes may be created without exceeding the string length or
@@ -283,16 +287,18 @@ pub struct Lua {
     collection_due: bool,
     // The memory counted against the limit after the last such collection.
     collected_to: usize,
-    // The objects the arena's mark queues may hold, counted while the arena is in use.
-    objects: Rc<QueuedObjects>,
+    // The bytes and objects counted while the arena is in use (see `crate::memory`).
+    accounting: Rc<Accounting>,
+    // The bytes ever allocated when the collector was last given debt for them (see `Lua::enter`).
+    paced_to: u64,
     // Set when the instance is dropped, so that the arena's objects, dropped after it, are
     // counted against it rather than against another instance in use.
-    dropping: Option<CountObjects>,
+    dropping: Option<Accounted>,
 }
 
 impl Drop for Lua {
     fn drop(&mut self) {
-        self.dropping = Some(CountObjects::new(&self.objects));
+        self.dropping = Some(Accounted::new(&self.accounting));
     }
 }
 
@@ -305,10 +311,10 @@ impl Default for Lua {
 impl Lua {
     /// Create a new `Lua` instance with no parts of the stdlib loaded.
     pub fn empty() -> Self {
-        let objects = Rc::new(QueuedObjects::default());
+        let accounting = Rc::new(Accounting::default());
         let arena = {
-            let _count = CountObjects::new(&objects);
-            Arena::<Rootable![State<'_>]>::new(|mc| State::new(mc, Rc::clone(&objects)))
+            let _accounted = Accounted::new(&accounting);
+            Arena::<Rootable![State<'_>]>::new(|mc| State::new(mc, Rc::clone(&accounting)))
         };
         Lua {
             arena,
@@ -316,7 +322,8 @@ impl Lua {
             near_limit: false,
             collection_due: false,
             collected_to: 0,
-            objects,
+            accounting,
+            paced_to: 0,
             dropping: None,
         }
     }
@@ -417,39 +424,41 @@ impl Lua {
         self.enter(|ctx| ctx.state.strings.set_hash_seed(seed))
     }
 
-    /// Size of all memory used by this Lua context.
-    ///
-    /// This is equivalent to `self.gc_metrics().total_allocation()`. This counts all `Gc` allocated
-    /// memory and also all data Lua datastructures held inside `Gc`, as they are tracked as
-    /// "external allocations" in `gc-arena`.
+    /// Size of all memory used by this Lua context: the heap blocks of every value a `Gc` points
+    /// to (garbage included until it is collected) and the storage they own (stacks, the parts of
+    /// tables, string bytes, buffers), which the instance counts itself (see [`crate::memory`]).
     pub fn total_memory(&self) -> usize {
-        self.gc_metrics().total_allocation()
+        self.accounting.bytes()
     }
 
     /// The bytes the memory limit reserves, on top of [`Lua::total_memory`], for the mark queues
     /// of the garbage collector, which it does not track (see [`Limits::memory`]).
     pub fn mark_queue_reserve(&self) -> usize {
-        self.objects.reserve()
+        self.accounting.reserve()
     }
 
-    /// Finish the current collection cycle completely, calls `gc_arena::Arena::collect_all()`.
+    /// Finish the current collection cycle completely, calls `gc_arena::Arena::finish_cycle()`.
     pub fn gc_collect(&mut self) {
-        let _count = CountObjects::new(&self.objects);
+        let _accounted = Accounted::new(&self.accounting);
         if self.arena.collection_phase() != CollectionPhase::Sweeping {
-            if let Some(marked) = self.arena.mark_all() {
+            if let Some(marked) = self.arena.finish_marking() {
                 marked.finalize(|fc, root| {
                     root.finalizers.prepare(fc);
                 });
             }
-            if let Some(marked) = self.arena.mark_all() {
+            if let Some(marked) = self.arena.finish_marking() {
                 marked.finalize(|fc, root| {
                     root.finalizers.finalize(fc);
                 });
             }
         }
 
-        self.arena.collect_all();
+        self.arena.finish_cycle();
         debug_assert!(self.arena.collection_phase() == CollectionPhase::Sleeping);
+        // A whole cycle has run: nothing is owed for what was allocated before it. gc-arena only
+        // forgets the debt itself when the cycle ran in one call from sleeping.
+        let metrics = self.arena.metrics();
+        metrics.adjust_debt(-metrics.allocation_debt());
     }
 
     pub fn gc_metrics(&self) -> &Metrics {
@@ -474,9 +483,10 @@ impl Lua {
     where
         F: for<'gc> FnOnce(Context<'gc>) -> T,
     {
+        // Debt units of collection work (see `Lua::pace`) below which no collection runs.
         const COLLECTOR_GRANULARITY: f64 = 1024.0;
 
-        let _count = CountObjects::new(&self.objects);
+        let _accounted = Accounted::new(&self.accounting);
         let collection_fuel = self.collect_near_limit();
         let r = self.arena.mutate(move |mc, state| {
             state.limits.charge_collection_fuel(collection_fuel);
@@ -485,21 +495,23 @@ impl Lua {
         self.pace();
         if self.arena.metrics().allocation_debt() > COLLECTOR_GRANULARITY {
             if self.arena.collection_phase() == CollectionPhase::Sweeping {
-                self.arena.collect_debt();
+                // Only up to the end of the cycle: the next one starts in a later call, with
+                // finalization.
+                self.arena.cycle_debt();
             } else {
                 if let Some(marked) = self.arena.mark_debt() {
                     marked.finalize(|fc, root| {
                         root.finalizers.prepare(fc);
                     });
-                    // `mark_all` only returns `None` while sweeping, and we have just finished
-                    // marking.
-                    if let Some(marked) = self.arena.mark_all() {
+                    // `finish_marking` only returns `None` while sweeping, and we have just
+                    // finished marking.
+                    if let Some(marked) = self.arena.finish_marking() {
                         marked.finalize(|fc, root| {
                             root.finalizers.finalize(fc);
                         });
                     }
                     // Immediately transition to `CollectionPhase::Sweeping`.
-                    if let Some(marked) = self.arena.mark_all() {
+                    if let Some(marked) = self.arena.finish_marking() {
                         marked.start_sweeping();
                     }
                 }
@@ -511,7 +523,8 @@ impl Lua {
 
     // The memory counted against the limit: the tracked memory and the mark queue reserve.
     fn counted_memory(&self) -> usize {
-        self.total_memory().saturating_add(self.objects.reserve())
+        self.total_memory()
+            .saturating_add(self.accounting.reserve())
     }
 
     // An allocation refused for the memory limit stops the script, and the incremental collector
@@ -561,26 +574,49 @@ impl Lua {
     // The memory limit counts garbage that has not been collected yet, so the collector has to
     // finish its cycles before garbage fills the room between the live data and the limit.
     //
-    // gc-arena's default pacing waits until the heap grows by half of what the last cycle kept,
-    // then collects one and two thirds of a byte for each byte allocated: a
-    // cycle can end with about twice the live data in memory, or more, so a script with half the
-    // limit live reached it with garbage. Once the heap passes a quarter of the limit, the next
-    // cycle starts right after the last one ends and collects five bytes for each byte allocated,
-    // which keeps the heap within about one and a quarter times the live data (plus what a step
-    // allocates). Below that, the default pacing does less work.
+    // gc-arena paces its collector by `Gc` pointers: each allocation is a unit of debt, and the
+    // collector pays it off at the rates of its `Pacing`, by the object. The storage values own
+    // (the parts of tables, string bytes, stacks) is not counted, so a script making few large
+    // values would hardly wake it: every `Lua::enter` adds the storage allocated since the last
+    // one as debt, in objects of the heap's average size. With the default pacing a cycle starts
+    // once the heap has grown by half of what the last one kept, and the collector does one
+    // unit of work for a little under two units of debt, so a cycle can end with about twice the
+    // live data in memory, or more: a script with half the limit live reached it with garbage.
+    // Once the counted memory passes a quarter of the limit, the next cycle starts right after
+    // the last one ends and the collector works four times as fast, which keeps the heap within
+    // about one and a quarter times the live data (plus what a step allocates). Below that, the
+    // default pacing does less work.
     fn pace(&mut self) {
+        const NEAR_LIMIT_PACING: Pacing = Pacing {
+            sleep_factor: 0.0,
+            min_sleep: 0,
+            mark_factor: Pacing::DEFAULT.mark_factor / 4.0,
+            trace_factor: Pacing::DEFAULT.trace_factor / 4.0,
+            keep_factor: Pacing::DEFAULT.keep_factor / 4.0,
+            drop_factor: Pacing::DEFAULT.drop_factor / 4.0,
+            free_factor: Pacing::DEFAULT.free_factor / 4.0,
+        };
+
+        let allocated = self.accounting.allocated();
+        let storage = allocated.saturating_sub(self.paced_to);
+        self.paced_to = allocated;
+        if storage > 0 {
+            let metrics = self.arena.metrics();
+            let objects = metrics.total_gc_count().max(1);
+            let average = (self.total_memory() / objects).max(1);
+            metrics.adjust_debt(storage as f64 / average as f64);
+        }
+
         let Some(memory) = self.memory_limit else {
             return;
         };
-        let near = self.arena.metrics().total_allocation() >= memory / 4;
+        let near = self.total_memory() >= memory / 4;
         if near != self.near_limit {
             self.near_limit = near;
             self.arena.metrics().set_pacing(if near {
-                Pacing::default()
-                    .with_pause_factor(0.0)
-                    .with_timing_factor(0.25)
+                NEAR_LIMIT_PACING
             } else {
-                Pacing::default()
+                Pacing::DEFAULT
             });
         }
     }
@@ -639,13 +675,13 @@ struct State<'gc> {
 }
 
 impl<'gc> State<'gc> {
-    fn new(mc: &Mutation<'gc>, objects: Rc<QueuedObjects>) -> State<'gc> {
+    fn new(mc: &Mutation<'gc>, accounting: Rc<Accounting>) -> State<'gc> {
         Self {
             globals: Table::new(mc),
             registry: Registry::new(mc),
             strings: InternedStringSet::new(mc),
             finalizers: Finalizers::new(mc),
-            limits: Gc::new(mc, LimitState::new(objects)),
+            limits: Gc::new(mc, LimitState::new(accounting)),
             settings: Gc::new(mc, Settings::default()),
             string_metatable: Gc::new(mc, Lock::new(None)),
         }

@@ -36,7 +36,7 @@ impl<'gc> Function<'gc> {
     /// etc.
     pub fn compose<I>(mc: &Mutation<'gc>, functions: I) -> Self
     where
-        I: AsRef<[Function<'gc>]> + Collect + 'gc,
+        I: AsRef<[Function<'gc>]> + Collect<'gc> + 'gc,
     {
         #[derive(Collect)]
         #[collect(no_drop)]
@@ -44,7 +44,7 @@ impl<'gc> Function<'gc> {
 
         impl<'gc, I> Sequence<'gc> for Compose<'gc, I>
         where
-            I: AsRef<[Function<'gc>]> + Collect,
+            I: AsRef<[Function<'gc>]> + Collect<'gc>,
         {
             fn poll(
                 self: Pin<&mut Self>,
@@ -91,7 +91,7 @@ impl<'gc> Function<'gc> {
     /// that calls `f(a, b, c, ...)`.
     pub fn bind<A>(self, mc: &Mutation<'gc>, args: A) -> Self
     where
-        A: IntoMultiValue<'gc> + Collect + Clone + 'gc,
+        A: IntoMultiValue<'gc> + Collect<'gc> + Clone + 'gc,
     {
         Self::Callback(Callback::from_fn_with(
             mc,

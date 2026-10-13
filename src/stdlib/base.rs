@@ -1,7 +1,6 @@
 use std::pin::Pin;
 
-use allocator_api2::vec;
-use gc_arena::{allocator_api::MetricsAlloc, Collect, Gc};
+use gc_arena::{Collect, Gc};
 
 use super::args::{
     arg_error, check_any, check_int, check_integer, check_string, error, error_bytes, is_lua51,
@@ -14,6 +13,7 @@ use crate::{
     compiler::{CompileBudget, CompileLimits},
     fuel::{cost, fuel_for},
     limits::ByteBuffer,
+    memory::TrackedVec,
     meta_ops::{self, MetaResult},
     table::NextValue,
     BoxSequence, Callback, CallbackReturn, Closure, CompilerError, Context, Error, Execution,
@@ -530,7 +530,7 @@ pub fn load_base<'gc>(ctx: Context<'gc>) -> Result<(), LimitError> {
         Callback::from_fn(&ctx, move |ctx, _, mut stack| {
             match stack.consume::<Option<String>>(ctx)? {
                 Some(arg) if arg == "count" => {
-                    stack.into_back(ctx, ctx.metrics().total_allocation() as f64 / 1024.0);
+                    stack.into_back(ctx, ctx.total_memory() as f64 / 1024.0);
                 }
                 Some(arg) => {
                     return Err(arg_error(
@@ -639,7 +639,7 @@ fn load<'gc>(
                     ReadChunk {
                         reader,
                         options,
-                        source: ByteBuffer::new(&ctx),
+                        source: ByteBuffer::new(),
                     },
                 )),
             })
@@ -756,7 +756,7 @@ impl<'gc> LoadOptions<'gc> {
         match result {
             Ok(proto) => {
                 let proto = Gc::new(&ctx, proto);
-                let mut upvalues = vec::Vec::new_in(MetricsAlloc::new(&ctx));
+                let mut upvalues = TrackedVec::new();
                 if !proto.upvalues.is_empty() {
                     // A chunk's only upvalue is `_ENV`.
                     let env = self.env.unwrap_or(Value::Table(ctx.globals()));

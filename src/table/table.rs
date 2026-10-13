@@ -8,7 +8,7 @@ use gc_arena::{lock::RefLock, Collect, Gc, Mutation};
 
 use crate::{
     fuel::{cost, fuel_for},
-    limits::Written,
+    memory::Written,
     table::Growth,
     Context, FromValue, IntoValue, LimitError, TypeError, Value,
 };
@@ -322,7 +322,7 @@ impl<'gc> IntoIterator for Table<'gc> {
 pub struct TableState<'gc> {
     pub raw_table: RawTable<'gc>,
     pub metatable: Option<Table<'gc>>,
-    queued: Written,
+    queued: Written<RefLock<TableState<'static>>>,
 }
 
 impl<'gc> fmt::Debug for TableState<'gc> {

@@ -4,10 +4,8 @@ use std::{
     slice::{self, SliceIndex},
 };
 
-use allocator_api2::vec;
-use gc_arena::allocator_api::MetricsAlloc;
-
 use crate::{
+    memory::TrackedVec,
     table::Growth,
     thread::{VMError, MAX_STACK_SIZE},
     Context, FromMultiValue, FromValue, IntoMultiValue, IntoValue, LimitError, TypeError, Value,
@@ -23,7 +21,7 @@ use crate::{
 /// and returns.
 pub struct Stack<'gc, 'a> {
     ctx: Context<'gc>,
-    values: &'a mut vec::Vec<Value<'gc>, MetricsAlloc<'gc>>,
+    values: &'a mut TrackedVec<Value<'gc>>,
     bottom: usize,
 }
 
@@ -31,11 +29,7 @@ impl<'gc, 'a> Stack<'gc, 'a> {
     /// Create a `Stack` view of all `values` above `bottom`.
     ///
     /// `bottom` must not be greater than `values.len()`, it is clamped to it if it is.
-    pub fn new(
-        ctx: Context<'gc>,
-        values: &'a mut vec::Vec<Value<'gc>, MetricsAlloc<'gc>>,
-        bottom: usize,
-    ) -> Self {
+    pub fn new(ctx: Context<'gc>, values: &'a mut TrackedVec<Value<'gc>>, bottom: usize) -> Self {
         debug_assert!(values.len() >= bottom);
         let bottom = bottom.min(values.len());
         Self {
@@ -184,10 +178,7 @@ impl<'gc, 'a> Stack<'gc, 'a> {
     /// Removes the given range of values from the stack, returning them.
     ///
     /// Unlike `Vec::drain`, the range is clamped to the values on the stack instead of panicking.
-    pub fn drain<R: RangeBounds<usize>>(
-        &mut self,
-        range: R,
-    ) -> vec::Drain<'_, Value<'gc>, MetricsAlloc<'gc>> {
+    pub fn drain<R: RangeBounds<usize>>(&mut self, range: R) -> std::vec::Drain<'_, Value<'gc>> {
         let len = self.len();
         let start = match range.start_bound().cloned() {
             Bound::Included(r) => r,
@@ -303,7 +294,7 @@ impl<'gc, 'a, I: SliceIndex<[Value<'gc>]>> IndexMut<I> for Stack<'gc, 'a> {
 /// memory limit first.
 pub(crate) fn reserve_values<'gc>(
     ctx: Context<'gc>,
-    values: &mut vec::Vec<Value<'gc>, MetricsAlloc<'gc>>,
+    values: &mut TrackedVec<Value<'gc>>,
     required: usize,
 ) -> Result<(), VMError> {
     if required > MAX_STACK_SIZE {

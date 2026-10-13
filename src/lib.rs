@@ -29,6 +29,7 @@ pub mod hash;
 pub mod io;
 pub mod limits;
 pub mod lua;
+pub mod memory;
 pub mod meta_ops;
 pub mod opcode;
 pub mod registry;

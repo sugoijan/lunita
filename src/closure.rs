@@ -1,7 +1,6 @@
 use std::hash::{Hash, Hasher};
 
-use allocator_api2::{boxed, vec, SliceExt};
-use gc_arena::{allocator_api::MetricsAlloc, barrier::unlock, lock::Lock, Collect, Gc, Mutation};
+use gc_arena::{barrier::unlock, lock::Lock, Collect, Gc, Mutation};
 use thiserror::Error;
 
 use crate::{
@@ -9,7 +8,7 @@ use crate::{
     compiler::{lexer::LexError, BudgetError, CompileBudget, CompileLimits},
     constant::is_exact_float_integer,
     hash::HashKeys,
-    limits::{Traced, Written},
+    memory::{Traced, TrackedVec, Written},
     opcode::OpCode,
     thread::OpenUpValue,
     types::UpValueDescriptor,
@@ -45,12 +44,12 @@ pub struct FunctionPrototype<'gc> {
     pub fixed_params: u8,
     pub has_varargs: bool,
     pub stack_size: u16,
-    pub constants: boxed::Box<[Constant<String<'gc>>], MetricsAlloc<'gc>>,
-    pub opcodes: boxed::Box<[OpCode], MetricsAlloc<'gc>>,
-    pub opcode_line_numbers: boxed::Box<[(usize, LineNumber)], MetricsAlloc<'gc>>,
-    pub upvalues: boxed::Box<[UpValueDescriptor], MetricsAlloc<'gc>>,
-    pub prototypes: boxed::Box<[Gc<'gc, FunctionPrototype<'gc>>], MetricsAlloc<'gc>>,
-    queued: Traced,
+    pub constants: TrackedVec<Constant<String<'gc>>>,
+    pub opcodes: TrackedVec<OpCode>,
+    pub opcode_line_numbers: TrackedVec<(usize, LineNumber)>,
+    pub upvalues: TrackedVec<UpValueDescriptor>,
+    pub prototypes: TrackedVec<Gc<'gc, FunctionPrototype<'gc>>>,
+    queued: Traced<FunctionPrototype<'static>>,
 }
 
 impl<'gc> FunctionPrototype<'gc> {
@@ -74,26 +73,17 @@ impl<'gc> FunctionPrototype<'gc> {
             compiled_function: &CompiledPrototype<S>,
             map_string: impl Fn(&S) -> String<'gc> + Copy,
         ) -> FunctionPrototype<'gc> {
-            let alloc = MetricsAlloc::new(mc);
-
-            let mut constants = vec::Vec::new_in(alloc.clone());
-            constants.extend(
+            let constants = TrackedVec::from_iter_exact(
                 compiled_function
                     .constants
                     .iter()
                     .map(|c| c.as_string_ref().map_string(map_string)),
             );
-
-            let opcodes = SliceExt::to_vec_in(compiled_function.opcodes.as_slice(), alloc.clone());
-            let opcode_line_numbers = SliceExt::to_vec_in(
-                compiled_function.opcode_line_numbers.as_slice(),
-                alloc.clone(),
-            );
-            let upvalues =
-                SliceExt::to_vec_in(compiled_function.upvalues.as_slice(), alloc.clone());
-
-            let mut prototypes = vec::Vec::new_in(alloc);
-            prototypes.extend(
+            let opcodes = TrackedVec::from_iter_exact(compiled_function.opcodes.iter().copied());
+            let opcode_line_numbers =
+                TrackedVec::from_iter_exact(compiled_function.opcode_line_numbers.iter().copied());
+            let upvalues = TrackedVec::from_iter_exact(compiled_function.upvalues.iter().copied());
+            let prototypes = TrackedVec::from_iter_exact(
                 compiled_function
                     .prototypes
                     .iter()
@@ -109,11 +99,11 @@ impl<'gc> FunctionPrototype<'gc> {
                 fixed_params: compiled_function.fixed_params,
                 has_varargs: compiled_function.has_varargs,
                 stack_size: compiled_function.stack_size,
-                constants: constants.into_boxed_slice(),
-                opcodes: opcodes.into_boxed_slice(),
-                opcode_line_numbers: opcode_line_numbers.into_boxed_slice(),
-                upvalues: upvalues.into_boxed_slice(),
-                prototypes: prototypes.into_boxed_slice(),
+                constants,
+                opcodes,
+                opcode_line_numbers,
+                upvalues,
+                prototypes,
                 queued: Traced::new(),
             }
         }
@@ -223,7 +213,7 @@ pub enum UpValueState<'gc> {
 #[collect(no_drop)]
 pub struct UpValueInner<'gc> {
     state: Lock<UpValueState<'gc>>,
-    queued: Written,
+    queued: Written<UpValueInner<'static>>,
 }
 
 #[derive(Debug, Collect, Copy, Clone)]
@@ -270,8 +260,8 @@ pub enum ClosureError {
 #[collect(no_drop)]
 pub struct ClosureInner<'gc> {
     proto: Gc<'gc, FunctionPrototype<'gc>>,
-    upvalues: vec::Vec<UpValue<'gc>, MetricsAlloc<'gc>>,
-    queued: Traced,
+    upvalues: TrackedVec<UpValue<'gc>>,
+    queued: Traced<ClosureInner<'static>>,
 }
 
 /// A garbage collected pointer to an executable Lua function.
@@ -306,7 +296,7 @@ impl<'gc> Closure<'gc> {
         environment: Option<Table<'gc>>,
     ) -> Result<Closure<'gc>, ClosureError> {
         let proto = Gc::new(mc, proto);
-        let mut upvalues = vec::Vec::new_in(MetricsAlloc::new(mc));
+        let mut upvalues = TrackedVec::new();
 
         if !proto.upvalues.is_empty() {
             if *proto.upvalues != [UpValueDescriptor::Environment] {
@@ -334,7 +324,7 @@ impl<'gc> Closure<'gc> {
     pub fn from_parts(
         mc: &Mutation<'gc>,
         proto: Gc<'gc, FunctionPrototype<'gc>>,
-        upvalues: vec::Vec<UpValue<'gc>, MetricsAlloc<'gc>>,
+        upvalues: TrackedVec<UpValue<'gc>>,
     ) -> Self {
         Self(Gc::new(
             mc,

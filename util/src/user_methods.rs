@@ -150,7 +150,7 @@ where
 impl<'gc, U> UserMethods<'gc, U>
 where
     U: for<'a> Rootable<'a> + 'static,
-    for<'a> Root<'a, U>: Sized + Collect,
+    for<'a> Root<'a, U>: Sized + Collect<'a>,
 {
     /// A type-safe convenience method that creates a new [`UserData`] value and sets its metatable
     /// to the one returned from [`UserMethods::metatable`].

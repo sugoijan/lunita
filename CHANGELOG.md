@@ -3,7 +3,8 @@
 `lunita` is a fork of piccolo 0.3.3, published under its own name. Hardening for running
 untrusted Lua (StepMania noteskins) inside a game, natively and on `wasm32-unknown-unknown` with
 `panic = "abort"`: no script may crash the host, take unbounded memory or time in one step, or
-behave differently between platforms. gc-arena stays at the pinned revision. `COMPATIBILITY.md`
+behave differently between platforms. gc-arena is the released 0.7 (piccolo pinned an
+unreleased revision), with the memory accounting done by the crate itself. `COMPATIBILITY.md`
 lists the differences from PUC-Rio Lua kept on purpose, `docs/hardening-notes.md` the tests,
 harnesses, measurements and open decisions. The sections below this one are piccolo's own
 changelog, kept for the history.
@@ -41,6 +42,15 @@ changelog, kept for the history.
 * The crates are `lunita` and `lunita-util`, at version 0.1.0: `use piccolo::` becomes
   `use lunita::`, or the dependency keeps the old path with
   `piccolo = { package = "lunita", version = "0.1" }`.
+* gc-arena 0.7 from crates.io (piccolo pinned an unreleased revision) and hashbrown 0.17; the
+  minimum Rust is 1.85. `Collect` takes the `'gc` lifetime (`Collect<'gc>`, with `NEEDS_TRACE`
+  and `trace<T: Trace<'gc>>`), so a host's bounds and manual impls change as gc-arena's changelog
+  describes; `#[derive(Collect)]` is unchanged. `Sequence<'gc>` has `DynCollect<'gc>` as its
+  supertrait, which every `Collect<'gc>` type implements. `Lua::gc_metrics` is gc-arena's
+  `Metrics`, which now counts `Gc` pointers, not bytes: `Lua::total_memory` and the new
+  `Context::total_memory` are the crate's own count (a host that read
+  `ctx.metrics().total_allocation()` reads `ctx.total_memory()`). `FunctionPrototype`'s fields
+  and `Closure::from_parts` use `memory::TrackedVec`, which reads as a slice.
 * `Table::set_field` and `Context::set_global` return `Result<Value, LimitError>`; the library
   loaders `load_base`, `load_coroutine`, `load_math` (and its parts), `load_string`,
   `load_table`, `load_io`, `Lua::load_core` and `Lua::load_io` return `Result<(), LimitError>`.
@@ -109,6 +119,11 @@ changelog, kept for the history.
 * `MAX_MATCH_STEPS` is 10^5 per match attempt (one attempt runs within a step: under 1 ms
   natively) and `LOAD_MAX_WORK` 20,000 units of compiler work (a `load` within 3–4 ms); both are
   constants.
+* The memory is counted by the crate (`lunita::memory`): every value a `Gc` points to carries a
+  zero-sized field that counts its heap block while it lives, and stacks, table parts, string
+  bytes and buffers live in containers that count their capacity. gc-arena's collector is paced
+  in objects, so the storage allocated between two `Lua::enter` calls is added as debt at the
+  heap's average bytes per object.
 * The memory limit refuses allocations at 15/16 of itself, less the mark-queue reserve, because
   gc-arena's mark queues and a few buffers are untracked. Past three quarters of the limit a
   collection is finished before the next mutation and charged to the next step.

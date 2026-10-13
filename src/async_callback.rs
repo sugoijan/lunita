@@ -12,7 +12,7 @@ use std::{
 use gc_arena::{Collect, DynamicRootSet, Mutation};
 
 use crate::{
-    limits::ExternalAllocation,
+    memory::TrackedBytes,
     stash::{Fetchable, Stashable},
     BoxSequence, Context, Error, Execution, Function, Sequence, SequencePoll, Stack, StashedError,
     StashedFunction, StashedThread, Thread,
@@ -77,16 +77,14 @@ where
     // this. This should allow soundly giving the `AsyncSequence` object a bare pointer to the
     // internals of its `BoxSequence` parent.
     //
-    // NOTE: The `Rc` allocation here and the one inside `DynamicRootSet` are not made through the
-    // GC metrics, so we mark an estimate of their size ourselves, which is unmarked when the
+    // NOTE: The `Rc` allocation here and the one inside `DynamicRootSet` are not counted for the
+    // memory limit, so we count an estimate of their size ourselves, which is uncounted when the
     // sequence is dropped. Deep recursion through metamethods can keep many async sequences alive
     // at once, so leaving them out would let memory usage go noticeably past the memory limit.
-    //
-    // This will be much easier to handle properly when `allocator_api` is stable.
     let shared = Rc::new(SharedSlot::new());
 
     let roots = DynamicRootSet::new(mc);
-    let marked = ExternalAllocation::new(mc, UNMARKED_ASYNC_SEQUENCE_BYTES);
+    let marked = TrackedBytes::new(UNMARKED_ASYNC_SEQUENCE_BYTES);
 
     let fut = create(
         Locals {
@@ -340,7 +338,7 @@ struct SequenceImpl<'gc, F> {
     shared: Rc<SharedSlot>,
     roots: DynamicRootSet<'gc>,
     #[collect(require_static)]
-    _marked: ExternalAllocation,
+    _marked: TrackedBytes,
     #[collect(require_static)]
     fut: F,
 }

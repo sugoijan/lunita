@@ -121,9 +121,9 @@ fn rekey_allocates_nothing() {
             let key = ctx.intern(format!("key{i}").as_bytes());
             table.set_raw(&ctx, key.into(), Value::Integer(i)).unwrap();
         }
-        let before = ctx.metrics().total_allocation();
+        let before = ctx.total_memory();
         table.set(ctx, "x", 1).unwrap();
-        let after = ctx.metrics().total_allocation();
+        let after = ctx.total_memory();
         assert!(
             after <= before + 64,
             "rekey allocated {} bytes",
