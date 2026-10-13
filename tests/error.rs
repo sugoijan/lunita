@@ -1,4 +1,4 @@
-use lunita::{error::LuaError, Callback, Closure, Error, Executor, ExternError, Lua, Value};
+use lunita::{Callback, Closure, Error, Executor, ExternError, Lua, Value, error::LuaError};
 use thiserror::Error;
 
 #[test]

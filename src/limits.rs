@@ -49,9 +49,9 @@ use gc_arena::Collect;
 use thiserror::Error;
 
 use crate::{
+    Context,
     fuel::{cost, fuel_for},
     memory::{Accounting, TrackedBytes},
-    Context,
 };
 
 /// Resource limits of a [`Lua`](crate::Lua) instance, `None` meaning unlimited.

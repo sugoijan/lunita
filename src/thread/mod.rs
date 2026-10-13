@@ -12,8 +12,8 @@ pub use self::{
         UpperLuaFrame,
     },
     thread::{
-        BadThreadMode, OpenUpValue, Thread, ThreadInner, ThreadMode, MAX_FRAMES, MAX_FRAMES_51,
-        MAX_STACK_SIZE,
+        BadThreadMode, MAX_FRAMES, MAX_FRAMES_51, MAX_STACK_SIZE, OpenUpValue, Thread, ThreadInner,
+        ThreadMode,
     },
 };
 

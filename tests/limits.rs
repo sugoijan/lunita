@@ -32,9 +32,9 @@ use cpu_time::ThreadTime;
 use peak_alloc::PeakAlloc;
 
 use lunita::{
-    compiler::{CompileBudget, CompileLimits},
     Callback, CallbackReturn, Closure, Executor, Fuel, FunctionPrototype, Limits, Lua,
     StashedExecutor, Value, Variadic,
+    compiler::{CompileBudget, CompileLimits},
 };
 
 #[global_allocator]
@@ -195,7 +195,11 @@ fn cases() -> Vec<Case> {
              print(tostring(setmetatable({}, mt)))",
             &[HostStop, Error, Limit],
         ),
-        case("C5", "local function f() return 1 + f() end f()", &[Error, Limit]),
+        case(
+            "C5",
+            "local function f() return 1 + f() end f()",
+            &[Error, Limit],
+        ),
         // Each level returns a value more than the one below: past the frame limit, the stack
         // overflow unwinds quadratically, charged per value, so the host may stop it first.
         case(
@@ -294,7 +298,11 @@ fn cases() -> Vec<Case> {
             &[HostStop, Limit],
         ),
         // Found by fuzzing: repeating an empty string looped once per repetition.
-        value_case("C13", "return #(''):rep(5^20) + #(''):rep(math.maxinteger, '')", &["0"]),
+        value_case(
+            "C13",
+            "return #(''):rep(5^20) + #(''):rep(math.maxinteger, '')",
+            &["0"],
+        ),
         // Found by fuzzing: a plain `find` compared up to `#s * #p` bytes in one step (and charged
         // `#s` for every candidate position).
         case(
@@ -352,8 +360,16 @@ fn cases() -> Vec<Case> {
             &[HostStop, Error],
         ),
         // Memory.
-        case("M1", "local s = 'x' for i = 1, 40 do s = s .. s end", &[Limit]),
-        case("M2", "local t = {} for i = 1, 1e9 do t[i] = i end", &[Limit]),
+        case(
+            "M1",
+            "local s = 'x' for i = 1, 40 do s = s .. s end",
+            &[Limit],
+        ),
+        case(
+            "M2",
+            "local t = {} for i = 1, 1e9 do t[i] = i end",
+            &[Limit],
+        ),
         // The limit error cannot be caught by `pcall` or a coroutine.
         case(
             "M2b",
@@ -366,7 +382,11 @@ fn cases() -> Vec<Case> {
              while true do coroutine.resume(co) end",
             &[Limit],
         ),
-        case("M3", "local t = {} for i = 1, 1e7 do t[i .. ''] = i end", &[Limit]),
+        case(
+            "M3",
+            "local t = {} for i = 1, 1e7 do t[i .. ''] = i end",
+            &[Limit],
+        ),
         case("M4a", "string.rep('x', 1.5e9)", &[Limit]),
         case("M4b", "('x'):rep(1e9, ',')", &[Limit]),
         value_case("M4c", "return #('x'):rep(-1)", &["0"]),
@@ -387,7 +407,11 @@ fn cases() -> Vec<Case> {
             &[Limit],
         ),
         case("M6a", "table.unpack({}, 1, 1e8)", &[Limit, Error]),
-        case("M6b", "string.byte(('x'):rep(2^20), 1, -1)", &[Limit, Error]),
+        case(
+            "M6b",
+            "string.byte(('x'):rep(2^20), 1, -1)",
+            &[Limit, Error],
+        ),
         case(
             "M6c",
             "local t = {} for i = 1, 1e6 do t[i] = 65 end string.char(table.unpack(t))",
@@ -489,7 +513,7 @@ fn cases() -> Vec<Case> {
              local j = 0 while true do j = j + 1 local g = ('y'):rep(2^19) .. j end",
             &[HostStop],
         ),
-        case("M10a","string.format('%099999d', 1)", &[Error]),
+        case("M10a", "string.format('%099999d', 1)", &[Error]),
         value_case(
             "M10b",
             "return ('%5.2s'):format(('x'):rep(2^20))",
@@ -567,7 +591,10 @@ fn cases() -> Vec<Case> {
         ),
         case(
             "P1c",
-            format!("local function f() return f end local x = f{}", "()".repeat(DEEP)),
+            format!(
+                "local function f() return f end local x = f{}",
+                "()".repeat(DEEP)
+            ),
             &[CompileError],
         ),
         case(
@@ -618,7 +645,11 @@ fn cases() -> Vec<Case> {
             nested("local x = ", "function() return ", "1", " end", 5_000),
             &[Success, CompileError],
         ),
-        case("P2i", nested("", "do ", "", "end ", DEEP), &[Success, CompileError]),
+        case(
+            "P2i",
+            nested("", "do ", "", "end ", DEEP),
+            &[Success, CompileError],
+        ),
         case(
             "P2j",
             nested("local a = true ", "if a then ", "", "end ", DEEP),
@@ -650,8 +681,16 @@ fn cases() -> Vec<Case> {
             deepest_nesting("local a = {} a.b = a local x = a", ".b", "", ""),
             &[Success],
         ),
-        case("P4b", deepest_nesting("local x = ", "(", "1", ")"), &[Success]),
-        case("P4c", deepest_nesting("local x = ", "{", "", "}"), &[Success]),
+        case(
+            "P4b",
+            deepest_nesting("local x = ", "(", "1", ")"),
+            &[Success],
+        ),
+        case(
+            "P4c",
+            deepest_nesting("local x = ", "{", "", "}"),
+            &[Success],
+        ),
         case(
             "P4d",
             deepest_nesting("local x = ", "function() return ", "1", " end"),
@@ -706,7 +745,11 @@ fn cases() -> Vec<Case> {
             &[Success],
         ),
         // Integers.
-        value_case("I1a", "local a, b = math.mininteger, -1 return a % b", &["0"]),
+        value_case(
+            "I1a",
+            "local a, b = math.mininteger, -1 return a % b",
+            &["0"],
+        ),
         value_case(
             "I1b",
             "local a, b = math.mininteger, -1 return a // b",

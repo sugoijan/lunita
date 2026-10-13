@@ -4,8 +4,8 @@ use gc_arena::{Collect, Gc, Rootable};
 use thiserror::Error;
 
 use crate::{
-    thread::VMError, Callback, CallbackReturn, Context, FromValue, Function, IntoValue, LimitError,
-    MetaMethod, Singleton, Table, UserData, Value,
+    Callback, CallbackReturn, Context, FromValue, Function, IntoValue, LimitError, MetaMethod,
+    Singleton, Table, UserData, Value, thread::VMError,
 };
 
 #[derive(Debug, Clone, Copy, Error)]

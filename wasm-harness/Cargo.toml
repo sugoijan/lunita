@@ -2,7 +2,7 @@
 name = "lunita-wasm-harness"
 version = "0.0.0"
 publish = false
-edition = "2021"
+edition = "2024"
 description = "Runs the limit cases of tests/limits.rs in wasm32-unknown-unknown, driven by run.mjs"
 
 [lib]

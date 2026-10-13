@@ -1,4 +1,4 @@
-use gc_arena::{lock::Lock, Collect, Gc, Rootable};
+use gc_arena::{Collect, Gc, Rootable, lock::Lock};
 use lunita::{Callback, CallbackReturn, Closure, Executor, Lua, UserData, Value};
 
 #[derive(Collect)]

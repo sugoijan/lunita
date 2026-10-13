@@ -8,13 +8,13 @@ use super::{
     continue_sequence,
 };
 use crate::{
+    BoxSequence, Callback, CallbackReturn, Closure, Context, Error, Execution, Fuel, Function,
+    IntoValue, LimitError, MetaMethod, Sequence, SequencePoll, Stack, Table, Value,
     fuel::{cost, count_fuel, fuel_for},
     limits::ByteBuffer,
     meta_ops::{self, MetaResult},
     table::{Growth, RawTable},
     thread::MAX_STACK_SIZE,
-    BoxSequence, Callback, CallbackReturn, Closure, Context, Error, Execution, Fuel, Function,
-    IntoValue, LimitError, MetaMethod, Sequence, SequencePoll, Stack, Table, Value,
 };
 
 pub fn load_table<'gc>(ctx: Context<'gc>) -> Result<(), LimitError> {

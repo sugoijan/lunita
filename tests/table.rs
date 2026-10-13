@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use lunita::{table::NextValue, Lua, Table, Value};
+use lunita::{Lua, Table, Value, table::NextValue};
 
 #[test]
 fn test_table_iter() {

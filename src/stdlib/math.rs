@@ -6,8 +6,8 @@ use super::args::{
     arg_error, check_any, check_integer, check_number, error, is_lua51, opt_integer,
 };
 use crate::{
-    async_sequence, constant::f64_to_i64, meta_ops, Callback, CallbackReturn, Context, Error,
-    LimitError, SequenceReturn, Stack, Table, Value,
+    Callback, CallbackReturn, Context, Error, LimitError, SequenceReturn, Stack, Table, Value,
+    async_sequence, constant::f64_to_i64, meta_ops,
 };
 
 pub fn load_math<'gc>(ctx: Context<'gc>) -> Result<(), LimitError> {

@@ -3,7 +3,7 @@ version: 2
 jobs:
   build:
     docker:
-      - image: cimg/rust:1.85
+      - image: cimg/rust:1.95
     steps:
       - checkout
       - run:
@@ -31,6 +31,8 @@ jobs:
           command: |
               rustfmt --version
               cargo fmt --all -- --check --color=auto
+              cargo fmt --all --manifest-path fuzz/Cargo.toml -- --check --color=auto
+              cargo fmt --all --manifest-path wasm-harness/Cargo.toml -- --check --color=auto
       - run:
           name: Build all targets
           command: cargo build --workspace --all-targets --all-features

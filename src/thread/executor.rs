@@ -1,17 +1,17 @@
 use std::hash::{Hash, Hasher};
 
-use gc_arena::{lock::RefLock, Collect, Gc, Mutation};
+use gc_arena::{Collect, Gc, Mutation, lock::RefLock};
 use thiserror::Error;
 
 use crate::{
+    CallbackReturn, Context, Error, FromMultiValue, Fuel, Function, IntoMultiValue, SequencePoll,
+    Stack, String, Thread, ThreadMode, Value, Variadic,
     compiler::{FunctionRef, LineNumber},
     error::LibraryError,
     fuel::{cost, fuel_for},
     limits::LimitError,
     memory::{TrackedVec, Written},
     thread::BadThreadMode,
-    CallbackReturn, Context, Error, FromMultiValue, Fuel, Function, IntoMultiValue, SequencePoll,
-    Stack, String, Thread, ThreadMode, Value, Variadic,
 };
 
 use super::{
@@ -278,7 +278,7 @@ impl<'gc> Executor<'gc> {
                 return Err(BadThreadMode {
                     found: mode,
                     expected: None,
-                })
+                });
             }
         }
 

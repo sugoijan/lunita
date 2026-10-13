@@ -5,14 +5,14 @@ use thiserror::Error;
 
 use crate::async_callback::{AsyncSequence, Locals};
 use crate::{
-    async_sequence, BoxSequence, Execution, Sequence, SequencePoll, SequenceReturn, Stack,
+    BoxSequence, Execution, Sequence, SequencePoll, SequenceReturn, Stack, async_sequence,
 };
 use crate::{
+    Callback, CallbackReturn, Constant, Context, Function, IntoValue, LimitError, Table, Value,
     compat::{self, Compat},
     constant::{compare_integer_float, float_floor_divide, lua51_integer_result},
     fuel::{cost, fuel_for},
     table::{InvalidTableKey, TableError},
-    Callback, CallbackReturn, Constant, Context, Function, IntoValue, LimitError, Table, Value,
 };
 
 /// An enum of every possible Lua metamethod.

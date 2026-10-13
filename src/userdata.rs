@@ -3,12 +3,12 @@ use std::{
     mem,
 };
 
-use gc_arena::{arena::Root, barrier, lock, Collect, Gc, Mutation, Rootable, Static};
+use gc_arena::{Collect, Gc, Mutation, Rootable, Static, arena::Root, barrier, lock};
 use thiserror::Error;
 
 use crate::{
-    any::{Any, AnyInner},
     Table,
+    any::{Any, AnyInner},
 };
 
 #[derive(Debug, Copy, Clone, Error)]

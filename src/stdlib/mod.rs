@@ -10,7 +10,7 @@ pub use self::{
     base::load_base,
     coroutine::load_coroutine,
     io::load_io,
-    math::{load_math, RandomState},
+    math::{RandomState, load_math},
     string::load_string,
     table::load_table,
 };

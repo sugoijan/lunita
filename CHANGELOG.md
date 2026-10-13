@@ -43,7 +43,7 @@ changelog, kept for the history.
   `use lunita::`, or the dependency keeps the old path with
   `piccolo = { package = "lunita", version = "0.1" }`.
 * gc-arena 0.7 from crates.io (piccolo pinned an unreleased revision) and hashbrown 0.17; the
-  minimum Rust is 1.85. `Collect` takes the `'gc` lifetime (`Collect<'gc>`, with `NEEDS_TRACE`
+  minimum Rust is 1.95 (gc-arena 0.7.0 needs it) and the crates use edition 2024. `Collect` takes the `'gc` lifetime (`Collect<'gc>`, with `NEEDS_TRACE`
   and `trace<T: Trace<'gc>>`), so a host's bounds and manual impls change as gc-arena's changelog
   describes; `#[derive(Collect)]` is unchanged. `Sequence<'gc>` has `DynCollect<'gc>` as its
   supertrait, which every `Collect<'gc>` type implements. `Lua::gc_metrics` is gc-arena's

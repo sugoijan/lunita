@@ -9,10 +9,10 @@ use gc_arena::{Collect, Gc, Mutation};
 use thiserror::Error;
 
 use crate::{
+    Callback, Closure, Function, LimitError, String, Table, Thread, UserData, Value,
     constant::f64_to_i64,
     hash::HashKeys,
     memory::{TrackedTable, TrackedVec},
-    Callback, Closure, Function, LimitError, String, Table, Thread, UserData, Value,
 };
 
 #[derive(Debug, Copy, Clone, Error)]
@@ -175,11 +175,7 @@ impl<'gc> RawTable<'gc> {
             0
         } else {
             let buckets = if map_capacity < 8 {
-                if map_capacity < 4 {
-                    4
-                } else {
-                    8
-                }
+                if map_capacity < 4 { 4 } else { 8 }
             } else {
                 (map_capacity.saturating_mul(8) / 7)
                     .checked_next_power_of_two()
@@ -734,11 +730,7 @@ impl<'gc> RawTable<'gc> {
             // up to a power of two, with a load factor of at most 7/8, and each bucket holds an
             // index and a control byte, plus a group of control bytes.
             let buckets = if new_capacity < 8 {
-                if new_capacity < 4 {
-                    4
-                } else {
-                    8
-                }
+                if new_capacity < 4 { 4 } else { 8 }
             } else {
                 (new_capacity.saturating_mul(8) / 7)
                     .checked_next_power_of_two()

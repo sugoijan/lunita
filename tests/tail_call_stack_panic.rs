@@ -1,6 +1,6 @@
 use std::string::String as StdString;
 
-use lunita::{meta_ops::MetaCallError, Closure, Executor, Lua};
+use lunita::{Closure, Executor, Lua, meta_ops::MetaCallError};
 
 const SOURCE: &str = r#"
     -- Purposeful typo of 'tostring'

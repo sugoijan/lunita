@@ -6,7 +6,7 @@ use lunita::{LimitError, Lua};
 
 pub use self::{
     de::from_value,
-    ser::{to_value, to_value_with, Options as SerOptions},
+    ser::{Options as SerOptions, to_value, to_value_with},
 };
 
 pub trait LuaSerdeExt {

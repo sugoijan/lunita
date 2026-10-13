@@ -1,9 +1,9 @@
 use std::{
-    fs::{read_dir, File},
-    io::{stdout, Read, Write},
+    fs::{File, read_dir},
+    io::{Read, Write, stdout},
 };
 
-use lunita::{io, Closure, Executor, ExternError, Lua};
+use lunita::{Closure, Executor, ExternError, Lua, io};
 
 fn run_lua_code(name: &str, code: &[u8]) -> Result<(), ExternError> {
     let mut lua = Lua::full();

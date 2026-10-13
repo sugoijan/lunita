@@ -184,10 +184,11 @@ impl<'h, 'f, F: for<'a> Freeze<'a>> ScopeGuard for FreezeGuard<'h, 'f, F> {
             !self.handle.is_valid(),
             "handle already used in another `FreezeGuard::scope` call"
         );
-        *self.handle.inner.borrow_mut() = Some(mem::transmute::<
-            <F as Freeze<'f>>::Frozen,
-            <F as Freeze<'static>>::Frozen,
-        >(self.value.take().unwrap()));
+        *self.handle.inner.borrow_mut() = Some(unsafe {
+            mem::transmute::<<F as Freeze<'f>>::Frozen, <F as Freeze<'static>>::Frozen>(
+                self.value.take().unwrap(),
+            )
+        });
     }
 
     fn unset(&mut self) {
@@ -307,8 +308,10 @@ impl ScopeGuard for () {
 
 impl<A: ScopeGuard, B: ScopeGuard> ScopeGuard for (A, B) {
     unsafe fn set(&mut self) {
-        self.0.set();
-        self.1.set();
+        unsafe {
+            self.0.set();
+            self.1.set();
+        }
     }
 
     fn unset(&mut self) {

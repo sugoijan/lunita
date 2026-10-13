@@ -4,7 +4,7 @@ use std::io::Write as _;
 
 use thiserror::Error;
 
-use crate::compat::{format_float, FloatFormat};
+use crate::compat::{FloatFormat, format_float};
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum FormatError {

@@ -8,6 +8,9 @@ use super::args::{
 };
 use crate::compiler::string_utils::c_str;
 use crate::{
+    BoxSequence, Callback, CallbackReturn, Closure, CompilerError, Context, Error, Execution,
+    Function, FunctionPrototype, IntoValue, LimitError, MetaMethod, Sequence, SequencePoll, Stack,
+    String, Table, TypeError, Value, Variadic,
     closure::{UpValue, UpValueState},
     compat::Compat,
     compiler::{CompileBudget, CompileLimits},
@@ -16,9 +19,6 @@ use crate::{
     memory::TrackedVec,
     meta_ops::{self, MetaResult},
     table::NextValue,
-    BoxSequence, Callback, CallbackReturn, Closure, CompilerError, Context, Error, Execution,
-    Function, FunctionPrototype, IntoValue, LimitError, MetaMethod, Sequence, SequencePoll, Stack,
-    String, Table, TypeError, Value, Variadic,
 };
 
 // DELIBERATE(puc): the library leaves to the host `_G`, `coroutine.wrap`, `isyieldable` and
@@ -67,7 +67,7 @@ pub fn load_base<'gc>(ctx: Context<'gc>) -> Result<(), LimitError> {
                             expected: "string",
                             found: value.type_name(),
                         }
-                        .into())
+                        .into());
                     }
                 };
                 if !(2..=36).contains(&base) {
@@ -379,7 +379,7 @@ pub fn load_base<'gc>(ctx: Context<'gc>) -> Result<(), LimitError> {
                 Value::Nil if stack.len() >= 2 => None,
                 Value::Table(mt) => Some(mt),
                 _ if is_lua51(ctx) => {
-                    return Err(arg_error("setmetatable", 1, "nil or table expected"))
+                    return Err(arg_error("setmetatable", 1, "nil or table expected"));
                 }
                 _ => return Err(type_error(&stack, "setmetatable", 1, "nil or table")),
             };

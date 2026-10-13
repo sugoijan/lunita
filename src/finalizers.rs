@@ -1,6 +1,6 @@
-use gc_arena::{lock::RefLock, Collect, Finalization, Gc, GcWeak, Mutation};
+use gc_arena::{Collect, Finalization, Gc, GcWeak, Mutation, lock::RefLock};
 
-use crate::{memory::TrackedVec, thread::ThreadInner, Thread};
+use crate::{Thread, memory::TrackedVec, thread::ThreadInner};
 
 #[derive(Copy, Clone, Collect)]
 #[collect(no_drop)]

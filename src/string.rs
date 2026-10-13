@@ -7,14 +7,14 @@ use std::{
 
 use ahash::AHasher;
 use gc_arena::{
-    barrier::Unlock, collect::Trace, lock::RefLock, Collect, Gc, GcWeak, Mutation, Static,
+    Collect, Gc, GcWeak, Mutation, Static, barrier::Unlock, collect::Trace, lock::RefLock,
 };
-use hashbrown::{hash_map, HashMap};
+use hashbrown::{HashMap, hash_map};
 
 use crate::{
     compiler::string_utils::{debug_utf8_lossy, display_utf8_lossy},
     hash::{HashKeys, HashState},
-    memory::{count_bytes, uncount_bytes, Boxed, TrackedTable},
+    memory::{Boxed, TrackedTable, count_bytes, uncount_bytes},
     table::Growth,
 };
 
@@ -317,7 +317,7 @@ impl<'gc> InternedDynStrings<'gc> {
         can_grow: impl FnOnce(Growth) -> bool,
     ) -> String<'gc> {
         // SAFETY: If a new string is added, we call the write barrier.
-        let mut dyn_strings = unsafe { self.0 .0.unlock_unchecked() }.borrow_mut();
+        let mut dyn_strings = unsafe { self.0.0.unlock_unchecked() }.borrow_mut();
 
         // The entries of freed strings are skipped here and dropped at the next collection.
         if let Some(&(key, _)) = dyn_strings.find(hash, |&(key, _)| {

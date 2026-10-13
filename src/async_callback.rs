@@ -1,6 +1,6 @@
 use std::{
     cell::Cell,
-    future::{poll_fn, Future},
+    future::{Future, poll_fn},
     marker::PhantomData,
     mem,
     pin::Pin,
@@ -12,10 +12,10 @@ use std::{
 use gc_arena::{Collect, DynamicRootSet, Mutation};
 
 use crate::{
-    memory::TrackedBytes,
-    stash::{Fetchable, Stashable},
     BoxSequence, Context, Error, Execution, Function, Sequence, SequencePoll, Stack, StashedError,
     StashedFunction, StashedThread, Thread,
+    memory::TrackedBytes,
+    stash::{Fetchable, Stashable},
 };
 
 /// Create a [`Sequence`] impl from a [`Future`] that can suspend, call Lua functions, yield to Lua,
@@ -509,7 +509,7 @@ impl SharedSlot {
 
         impl<'a> Drop for Guard<'a> {
             fn drop(&mut self) {
-                self.0 .0.set(ptr::null_mut());
+                self.0.0.set(ptr::null_mut());
             }
         }
 

@@ -1,4 +1,5 @@
 use crate::{
+    Closure, Constant, Context, Function, String, Table, Value,
     compat::Compat,
     constant::f64_to_i64,
     memory::TrackedVec,
@@ -6,12 +7,11 @@ use crate::{
     opcode::{Operation, RCIndex},
     thread::thread::MetaReturn,
     types::{RegisterIndex, UpValueDescriptor, VarCount},
-    Closure, Constant, Context, Function, String, Table, Value,
 };
 
 use super::{
-    thread::{LuaFrame, LuaRegisters},
     VMError,
+    thread::{LuaFrame, LuaRegisters},
 };
 
 // Runs the VM for the given number of instructions or until the current LuaFrame may have been

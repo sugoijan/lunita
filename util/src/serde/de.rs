@@ -1,6 +1,6 @@
 use std::fmt;
 
-use lunita::{table::NextValue, Table, Value};
+use lunita::{Table, Value, table::NextValue};
 use serde::de;
 use thiserror::Error;
 

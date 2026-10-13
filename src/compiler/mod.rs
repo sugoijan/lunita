@@ -10,10 +10,10 @@ pub mod string_utils;
 pub use self::{
     budget::{BudgetError, CompileBudget, CompileLimits},
     compiler::{
-        compile_chunk, compile_chunk_with_budget, CompileError, CompileErrorKind,
-        CompiledPrototype, FunctionRef,
+        CompileError, CompileErrorKind, CompiledPrototype, FunctionRef, compile_chunk,
+        compile_chunk_with_budget,
     },
     interning::StringInterner,
     lexer::LineNumber,
-    parser::{parse_chunk, parse_chunk_with_budget, ParseError, ParseErrorKind},
+    parser::{ParseError, ParseErrorKind, parse_chunk, parse_chunk_with_budget},
 };

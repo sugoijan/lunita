@@ -11,10 +11,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use peak_alloc::PeakAlloc;
 use lunita::{
     Callback, CallbackReturn, Closure, Compat, Executor, Fuel, Limits, Lua, Value, Variadic,
 };
+use peak_alloc::PeakAlloc;
 
 pub mod grammar;
 
@@ -69,7 +69,8 @@ pub fn run(source: &[u8], compat: Compat) {
         ctx.set_global(
             "print",
             Callback::from_fn(&ctx, |_, _, _| Ok(CallbackReturn::Return)),
-        ).unwrap();
+        )
+        .unwrap();
     });
 
     let baseline = ALLOCATOR.current_usage();

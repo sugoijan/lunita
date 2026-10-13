@@ -19,8 +19,13 @@ what is still open.
   watchdog that kills the command above 2 GB of RSS or after the time limit.
 - No new `unsafe`: the tree has fewer `unsafe` lines than upstream (the insertion-ordered tables
   deleted three blocks, the gc-arena 0.7 port the sequence box's cast), and every remaining block
-  reads as upstream's. The one `Drop` on a manually collected type (`HeaderCallback`) only
-  touches the memory accounting.
+  reads as upstream's. Edition 2024 added only the `unsafe` blocks it requires inside the two
+  `unsafe fn`s of `lunita-util`'s `ScopeGuard` and the `unsafe(no_mangle)` attributes of the
+  wasm harness, around the same operations. The one `Drop` on a manually collected type
+  (`HeaderCallback`) only touches the memory accounting.
+- Everything is formatted by `rustfmt` with the 2024 style: `cargo fmt --all --check` passes in
+  the workspace and, with `--manifest-path`, in `fuzz/` and `wasm-harness/` (their own
+  workspaces). CI checks all three.
 - Behaviour that differs from PUC-Rio Lua may change to match it, and anything that already
   matches must keep matching; a difference kept on purpose is marked where it lives in the code
   with a comment holding `DELIBERATE(puc)` (pointing at COMPATIBILITY.md) or, for a cost-model
@@ -47,7 +52,8 @@ what is still open.
 APIs `Opt254::new`, which the library reaches only through `VarCount::constant` with counts of at
 most 253, and `Stack`'s `Index` impls, which the library itself does not use).
 `cargo clippy --lib` passes; `cargo clippy --all-targets` reports fewer warnings than upstream's
-tree (70 against 111), all in upstream code.
+tree (80 against 111): the upstream ones, and 19 hints to use the let chains edition 2024
+enables.
 
 PUC-Rio Lua 5.4.9's own test suite does not run as is (it needs `debug`, `io`, `os`, `utf8`,
 `package`, `string.pack`, `coroutine.wrap` and PUC's runtime error messages). With small shims for

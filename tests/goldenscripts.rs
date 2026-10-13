@@ -19,9 +19,9 @@ use crate::collected_print::print_callback;
 mod collected_print {
     use gc_arena::Collect;
     use lunita::{
-        meta_ops::{self, MetaResult},
         BoxSequence, Callback, CallbackReturn, Context, Execution, Sequence, SequencePoll, Stack,
         Value,
+        meta_ops::{self, MetaResult},
     };
     use std::{
         io::{Cursor, Write},
@@ -195,7 +195,9 @@ fn test_goldenscripts() {
                 if let Some(error) = compile_error {
                     let formatted_error = format!("{error}\n");
                     if formatted_error != expected_output {
-                        eprintln!("{path:?}: did not match expected output\n\nexpected:\n{expected_output}\noutput:\n{formatted_error}");
+                        eprintln!(
+                            "{path:?}: did not match expected output\n\nexpected:\n{expected_output}\noutput:\n{formatted_error}"
+                        );
                         failed_scripts.push(path);
                         continue;
                     }
@@ -215,7 +217,9 @@ fn test_goldenscripts() {
                     continue;
                 }
                 if let Some(error) = run_error {
-                    eprintln!("{path:?}: expected script to pass, but it threw and error at runtime\nerror: {error}");
+                    eprintln!(
+                        "{path:?}: expected script to pass, but it threw and error at runtime\nerror: {error}"
+                    );
                     failed_scripts.push(path);
                     continue;
                 }
@@ -223,7 +227,10 @@ fn test_goldenscripts() {
                 let output: Vec<_> = rx.try_iter().flatten().collect();
                 if output != expected_output.as_bytes() {
                     // Technically `output` is ASCII, but UTF8 is compatible
-                    eprintln!("{path:?}: did not match expected output\n\nexpected:\n{expected_output}\noutput:\n{}\n---\n{output:?}", String::from_utf8_lossy(&output));
+                    eprintln!(
+                        "{path:?}: did not match expected output\n\nexpected:\n{expected_output}\noutput:\n{}\n---\n{output:?}",
+                        String::from_utf8_lossy(&output)
+                    );
                     failed_scripts.push(path);
                     continue;
                 }

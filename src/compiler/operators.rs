@@ -1,8 +1,8 @@
 use crate::{
+    Constant,
     constant::is_exact_float_integer,
     opcode::{Operation, RCIndex},
     types::RegisterIndex,
-    Constant,
 };
 
 use super::parser::{BinaryOperator, UnaryOperator};

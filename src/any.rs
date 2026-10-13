@@ -5,12 +5,12 @@ use std::{
 };
 
 use gc_arena::{
+    Collect, Gc, Mutation, Rootable,
     arena::Root,
     barrier::{self, Write},
-    Collect, Gc, Mutation, Rootable,
 };
 
-use crate::memory::{box_size, TrackedBytes};
+use crate::memory::{TrackedBytes, box_size};
 
 /// A `Gc` pointer to any type `T: Collect<'gc> + 'gc` which allows safe downcasting.
 ///

@@ -5,10 +5,10 @@ use std::{
 };
 
 use crate::{
+    Context, FromMultiValue, FromValue, IntoMultiValue, IntoValue, LimitError, TypeError, Value,
     memory::TrackedVec,
     table::Growth,
-    thread::{VMError, MAX_STACK_SIZE},
-    Context, FromMultiValue, FromValue, IntoMultiValue, IntoValue, LimitError, TypeError, Value,
+    thread::{MAX_STACK_SIZE, VMError},
 };
 
 /// The mechanism through which all callbacks receive parameters and return values.

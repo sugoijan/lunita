@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::Read;
 
-use lunita::{io::buffered_read, Closure, Executor, Lua};
+use lunita::{Closure, Executor, Lua, io::buffered_read};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load the Lua file

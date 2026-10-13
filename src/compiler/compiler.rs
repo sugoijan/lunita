@@ -1,5 +1,5 @@
 use std::{
-    collections::{hash_map, VecDeque},
+    collections::{VecDeque, hash_map},
     fmt, iter, mem,
 };
 
@@ -8,22 +8,23 @@ use gc_arena::Collect;
 use thiserror::Error;
 
 use crate::{
+    Constant,
     constant::IdenticalConstant,
     hash::HashKeys,
     opcode::{OpCode, Operation, RCIndex},
     types::{
-        ConstantIndex16, ConstantIndex8, Opt254, PrototypeIndex, RegisterIndex, UpValueDescriptor,
+        ConstantIndex8, ConstantIndex16, Opt254, PrototypeIndex, RegisterIndex, UpValueDescriptor,
         UpValueIndex, VarCount,
     },
-    Constant,
 };
 
 use super::{
+    BudgetError, CompileBudget, StringInterner,
     lexer::LineNumber,
     operators::{
-        categorize_binop, comparison_binop_const_fold, comparison_binop_operation,
-        simple_binop_const_fold, simple_binop_operation, unop_const_fold, unop_operation,
-        BinOpCategory, ComparisonBinOp, ShortCircuitBinOp, SimpleBinOp,
+        BinOpCategory, ComparisonBinOp, ShortCircuitBinOp, SimpleBinOp, categorize_binop,
+        comparison_binop_const_fold, comparison_binop_operation, simple_binop_const_fold,
+        simple_binop_operation, unop_const_fold, unop_operation,
     },
     parser::{
         AssignmentStatement, AssignmentTarget, BinaryOperator, Block, CallSuffix, Chunk,
@@ -34,7 +35,6 @@ use super::{
         TableConstructor, UnaryOperator, WhileStatement,
     },
     register_allocator::RegisterAllocator,
-    BudgetError, CompileBudget, StringInterner,
 };
 
 #[derive(Debug, Copy, Clone, Error)]
@@ -667,7 +667,7 @@ impl<S: StringInterner> Compiler<'_, S> {
                     _ => {
                         return Err(CompileErrorKind::Internal(
                             "instruction is not placeholder NumericForPrep",
-                        ))
+                        ));
                     }
                 }
 
@@ -1690,7 +1690,7 @@ impl<S: StringInterner> Compiler<'_, S> {
                 _ => {
                     return Err(CompileErrorKind::Internal(
                         "jump instruction is not a placeholder jump instruction",
-                    ))
+                    ));
                 }
             }
         }

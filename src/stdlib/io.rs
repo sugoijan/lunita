@@ -6,10 +6,10 @@ use std::{
 use gc_arena::Collect;
 
 use crate::{
-    fuel::{cost, fuel_for},
-    meta_ops::{self, MetaResult},
     BoxSequence, Callback, CallbackReturn, Context, Error, Execution, LimitError, Sequence,
     SequencePoll, Stack, Value,
+    fuel::{cost, fuel_for},
+    meta_ops::{self, MetaResult},
 };
 
 pub fn load_io<'gc>(ctx: Context<'gc>) -> Result<(), LimitError> {

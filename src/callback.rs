@@ -6,13 +6,13 @@ use std::{
 };
 
 use gc_arena::{
-    collect::{DynCollect, Trace},
     Collect, Gc, Mutation,
+    collect::{DynCollect, Trace},
 };
 
 use crate::{
-    memory::{count_box, uncount_box, Queued, TrackedBytes},
     Context, Error, Execution, Function, Stack, Thread,
+    memory::{Queued, TrackedBytes, count_box, uncount_box},
 };
 
 /// Describes the next action for an [`Executor`](crate::Executor) to take after a callback has

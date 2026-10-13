@@ -4,13 +4,13 @@ use std::{
     mem,
 };
 
-use gc_arena::{lock::RefLock, Collect, Gc, Mutation};
+use gc_arena::{Collect, Gc, Mutation, lock::RefLock};
 
 use crate::{
+    Context, FromValue, IntoValue, LimitError, TypeError, Value,
     fuel::{cost, fuel_for},
     memory::Written,
     table::Growth,
-    Context, FromValue, IntoValue, LimitError, TypeError, Value,
 };
 
 use super::raw::{InvalidTableKey, NextValue, RawTable, TableError};

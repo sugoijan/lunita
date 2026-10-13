@@ -4,10 +4,12 @@ use std::{
     mem,
 };
 
-use gc_arena::{lock::RefLock, Collect, Finalization, Gc, GcWeak, Mutation};
+use gc_arena::{Collect, Finalization, Gc, GcWeak, Mutation, lock::RefLock};
 use thiserror::Error;
 
 use crate::{
+    BoxSequence, Callback, Closure, Context, Error, FromMultiValue, Fuel, Function, IntoMultiValue,
+    String, Table, UserData, Value,
     closure::{UpValue, UpValueState},
     compat::Compat,
     fuel::{cost, count_fuel, fuel_for},
@@ -15,8 +17,6 @@ use crate::{
     meta_ops, stack,
     table::{Growth, TableError},
     types::{RegisterIndex, VarCount},
-    BoxSequence, Callback, Closure, Context, Error, FromMultiValue, Fuel, Function, IntoMultiValue,
-    String, Table, UserData, Value,
 };
 
 use super::VMError;

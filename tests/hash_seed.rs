@@ -3,7 +3,7 @@
 
 use std::hash::Hasher;
 
-use lunita::{hash::HashKeys, Closure, Executor, Lua, Table, Value};
+use lunita::{Closure, Executor, Lua, Table, Value, hash::HashKeys};
 
 /// The numbers `n` for which the low 16 bits of `AHasher::default()`'s hash of `"k<n>"` are zero,
 /// found in review (with ahash 0.8.11's AES hasher, on aarch64): piccolo hashed strings with

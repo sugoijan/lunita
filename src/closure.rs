@@ -1,18 +1,18 @@
 use std::hash::{Hash, Hasher};
 
-use gc_arena::{barrier::unlock, lock::Lock, Collect, Gc, Mutation};
+use gc_arena::{Collect, Gc, Mutation, barrier::unlock, lock::Lock};
 use thiserror::Error;
 
 use crate::{
+    Compat, Constant, Context, LimitError, String, Table, Value,
     compiler::{self, CompiledPrototype, FunctionRef, LineNumber},
-    compiler::{lexer::LexError, BudgetError, CompileBudget, CompileLimits},
+    compiler::{BudgetError, CompileBudget, CompileLimits, lexer::LexError},
     constant::is_exact_float_integer,
     hash::HashKeys,
     memory::{Traced, TrackedVec, Written},
     opcode::OpCode,
     thread::OpenUpValue,
     types::UpValueDescriptor,
-    Compat, Constant, Context, LimitError, String, Table, Value,
 };
 
 // Note: These errors must not have #[error(transparent)] so that

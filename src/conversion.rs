@@ -1,8 +1,8 @@
 use std::{iter, ops, string::String as StdString};
 
 use crate::{
-    fuel::{cost, fuel_for},
     Callback, Closure, Context, Function, String, Table, Thread, TypeError, UserData, Value,
+    fuel::{cost, fuel_for},
 };
 
 pub trait IntoValue<'gc> {

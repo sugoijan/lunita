@@ -14,17 +14,16 @@ mod pattern;
 
 use std::pin::Pin;
 
-use gc_arena::{lock::RefLock, Collect, Gc};
+use gc_arena::{Collect, Gc, lock::RefLock};
 
 use crate::{
-    compat,
+    BoxSequence, Callback, CallbackReturn, Context, Error, Execution, Fuel, Function, LimitError,
+    Sequence, SequencePoll, Stack, String, Table, Value, compat,
     compiler::string_utils::c_str,
     fuel::{cost, fuel_for},
     limits::ByteBuffer,
     memory::Written,
     meta_ops::{self, MetaResult},
-    BoxSequence, Callback, CallbackReturn, Context, Error, Execution, Fuel, Function, LimitError,
-    Sequence, SequencePoll, Stack, String, Table, Value,
 };
 
 use self::{
@@ -1315,7 +1314,7 @@ fn format_one<'gc>(
                 FormatError::InvalidOption(char::from(c))
             } else {
                 FormatError::InvalidConversion(char::from(c).to_string())
-            }))
+            }));
         }
     }
     Ok(())

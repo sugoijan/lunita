@@ -215,11 +215,7 @@ impl<'a> Matcher<'a> {
             b'z' => c == 0,
             _ => return cl == c,
         };
-        if cl.is_ascii_lowercase() {
-            res
-        } else {
-            !res
-        }
+        if cl.is_ascii_lowercase() { res } else { !res }
     }
 
     // `p` is the '[' of the class, `ec` its ']'.

@@ -16,9 +16,9 @@
 use std::cell::RefCell;
 
 use lunita::{
-    compiler::{CompileBudget, CompileLimits},
     Callback, CallbackReturn, Closure, Executor, Fuel, FunctionPrototype, Limits, Lua,
     StashedExecutor, Value, Variadic,
+    compiler::{CompileBudget, CompileLimits},
 };
 
 const MEMORY_LIMIT: usize = 32 << 20;
@@ -43,7 +43,7 @@ thread_local! {
     };
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn source_buffer(len: u32) -> u32 {
     STATE.with_borrow_mut(|state| {
         state.lua = None;
@@ -52,7 +52,7 @@ pub extern "C" fn source_buffer(len: u32) -> u32 {
     })
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn start() -> u32 {
     STATE.with_borrow_mut(|state| {
         let mut lua = Lua::core();
@@ -64,7 +64,8 @@ pub extern "C" fn start() -> u32 {
             ctx.set_global(
                 "print",
                 Callback::from_fn(&ctx, |_, _, _| Ok(CallbackReturn::Return)),
-            ).unwrap();
+            )
+            .unwrap();
         });
         // As `Closure::load` does, with the budget at hand to read the work done.
         let executor = lua.try_enter(|ctx| {
@@ -87,7 +88,7 @@ pub extern "C" fn start() -> u32 {
     })
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn step() -> u32 {
     STATE.with_borrow_mut(|state| {
         let Some((lua, executor)) = &mut state.lua else {
@@ -113,17 +114,17 @@ pub extern "C" fn step() -> u32 {
     })
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn step_fuel() -> i32 {
     STATE.with_borrow(|state| state.step_fuel)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn compile_work() -> u32 {
     STATE.with_borrow(|state| u32::try_from(state.compile_work).unwrap_or(u32::MAX))
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tracked_memory() -> u32 {
     STATE.with_borrow_mut(|state| {
         state

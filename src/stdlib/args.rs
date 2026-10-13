@@ -4,11 +4,11 @@
 use std::fmt;
 
 use crate::{
+    Compat, Context, Error, RuntimeError, Stack, String, Value,
     compiler::string_utils::lua51_str2number,
     constant::f64_to_i64,
     error::LibraryError,
     fuel::{cost, fuel_for},
-    Compat, Context, Error, RuntimeError, Stack, String, Value,
 };
 
 pub(crate) type Result<'gc, T> = std::result::Result<T, Error<'gc>>;
