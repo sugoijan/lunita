@@ -82,11 +82,7 @@ upstream's; the fork added none.
 
 ## License
 
-`lunita` is licensed under either of:
-
-* MIT license [LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT
-* Creative Commons CC0 1.0 Universal Public Domain Dedication
-  [LICENSE-CC0](LICENSE-CC0) or
-  https://creativecommons.org/publicdomain/zero/1.0/
-
-at your option, as piccolo is. Copyright of the original work is kyren's.
+`lunita` is licensed under the MIT license ([LICENSE-MIT](LICENSE-MIT) or
+http://opensource.org/licenses/MIT). Copyright of the original work is kyren's; piccolo is
+offered under either MIT or the Creative Commons CC0 1.0 Universal Public Domain Dedication
+([LICENSE-CC0](LICENSE-CC0)), at your option.

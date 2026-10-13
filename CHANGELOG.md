@@ -1,4 +1,4 @@
-## lunita 0.1.0 (unreleased)
+## lunita 0.1.0 (2026-10-13)
 
 `lunita` is a fork of piccolo 0.3.3, published under its own name. Hardening for running
 untrusted Lua (StepMania noteskins) inside a game, natively and on `wasm32-unknown-unknown` with

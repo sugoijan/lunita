@@ -15,6 +15,8 @@ rust-version = "1.95"
 authors = ["すごいジャン <me@sugoijan.dev>", "kyren <catherine@kyju.org>"]
 license = "MIT"
 repository = "https://github.com/sugoijan/lunita"
+keywords = ["lua", "vm", "sandbox", "interpreter", "gc"]
+categories = ["compilers", "game-development"]
 
 [workspace.dependencies]
 # Without `runtime-rng`, which needs `getrandom` (and JS imports on wasm32-unknown-unknown).
@@ -36,6 +38,10 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+# Upstream's CI and nix files, of no use to a host.
+exclude = [".circleci", ".envrc", "flake.nix", "flake.lock"]
 
 [dependencies]
 ahash.workspace = true
