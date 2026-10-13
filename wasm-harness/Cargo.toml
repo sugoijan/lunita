@@ -1,5 +1,5 @@
 [package]
-name = "piccolo-wasm-harness"
+name = "lunita-wasm-harness"
 version = "0.0.0"
 publish = false
 edition = "2021"
@@ -9,9 +9,9 @@ description = "Runs the limit cases of tests/limits.rs in wasm32-unknown-unknown
 crate-type = ["cdylib"]
 
 [dependencies]
-piccolo = { path = ".." }
+lunita = { path = ".." }
 
-# Not part of piccolo's workspace.
+# Not part of lunita's workspace.
 [workspace]
 members = ["."]
 

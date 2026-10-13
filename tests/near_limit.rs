@@ -1,7 +1,7 @@
 //! Behaviour near the memory limit: operations that need no new memory are not refused, and the
 //! collections finished at `Lua::enter` stay bounded.
 
-use piccolo::{Callback, CallbackReturn, Closure, Executor, ExternError, Fuel, Limits, Lua};
+use lunita::{Callback, CallbackReturn, Closure, Executor, ExternError, Fuel, Limits, Lua};
 
 fn run(lua: &mut Lua, source: &str) -> Result<(), ExternError> {
     let executor = lua.try_enter(|ctx| {

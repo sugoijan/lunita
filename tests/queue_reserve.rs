@@ -1,4 +1,4 @@
-use piccolo::{Closure, Executor, Lua};
+use lunita::{Closure, Executor, Lua};
 
 fn run(lua: &mut Lua, source: &str) {
     let executor = lua

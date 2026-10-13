@@ -3,7 +3,7 @@
 
 use std::hash::Hasher;
 
-use piccolo::{hash::HashKeys, Closure, Executor, Lua, Table, Value};
+use lunita::{hash::HashKeys, Closure, Executor, Lua, Table, Value};
 
 /// The numbers `n` for which the low 16 bits of `AHasher::default()`'s hash of `"k<n>"` are zero,
 /// found in review (with ahash 0.8.11's AES hasher, on aarch64): piccolo hashed strings with
@@ -20,7 +20,7 @@ fn review_collisions() -> Vec<u64> {
         .collect()
 }
 
-/// The hashes piccolo gives `strings` in an instance seeded with `seed` (unseeded if `None`).
+/// The hashes lunita gives `strings` in an instance seeded with `seed` (unseeded if `None`).
 fn hashes(seed: Option<u64>, strings: &[String]) -> Vec<u64> {
     let mut lua = Lua::empty();
     if let Some(seed) = seed {
@@ -82,7 +82,7 @@ fn review_collisions_spread() {
         assert_eq!(colliding, strings.len());
     }
 
-    // With piccolo's keys, seeded or not, they spread over the low 16 bits like any 65,536
+    // With lunita's keys, seeded or not, they spread over the low 16 bits like any 65,536
     // strings (the largest of 65,536 groups is about 8 then).
     for seed in [None, Some(1), Some(0x5eed_5eed_5eed_5eed)] {
         let largest = largest_group(&hashes(seed, &strings), 16);

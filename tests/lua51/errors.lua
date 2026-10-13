@@ -98,7 +98,7 @@ show(load(function() i = i + 1 return parts[i] end)())
 print('library errors')
 -- Errors raised by library functions get the position of the Lua code calling them, unless they
 -- are called from another library function (such as pcall). (PUC-Rio Lua names a function called
--- from pcall or as a metamethod '?', piccolo names it.)
+-- from pcall or as a metamethod '?', lunita names it.)
 show(pcall(function() string.rep() end))
 show(pcall(function() local s = string.rep('x', {}) end))
 show(pcall(function() assert(false) end))

@@ -2,7 +2,7 @@
 
 Notes for whoever maintains this fork. The CHANGELOG lists what changed and what hosts migrate;
 COMPATIBILITY.md lists the differences from PUC-Rio Lua kept on purpose; the rustdoc of
-`piccolo::limits`, `piccolo::fuel::cost` and `Compat::Lua51` describes the limits, the cost model
+`lunita::limits`, `lunita::fuel::cost` and `Compat::Lua51` describes the limits, the cost model
 and the Lua 5.1 mode. This file keeps the rest: how the work is checked, what was measured, and
 what is still open.
 
@@ -87,7 +87,7 @@ fuzz/update-seeds.sh                                  # refresh the fuzz seeds
   objects against it alone when instances nest.
 - `tests/lua51/`: scripts compared byte for byte with PUC-Rio Lua 5.1.5 (`numbers`, `strings`,
   `errors`, `tables`, `math`, `meta`, `loops`; the harness adds 5.1's `newproxy` for userdata).
-  Where piccolo's error wording differs on purpose (the VM's runtime errors), a script compares
+  Where lunita's error wording differs on purpose (the VM's runtime errors), a script compares
   the outcome only.
 - `tests/scripts/*_54.lua`: default-mode scripts that also pass under PUC-Rio Lua 5.4.9 (run
   them from `tests/scripts`, with the file name as the argument for `errors_54.lua`).
@@ -130,7 +130,7 @@ Upstream tests changed: `tests/error.rs` (`error_unwind`), `tests/scripts/pcall.
 `tests/scripts/coroutine.lua`, because `error` adds the position PUC-Rio Lua adds;
 `tests/scripts.rs` passes each script its chunk name, for `errors_54.lua`; the unit test
 `string::tests::test_string_header` passes the hash keys the string constructors take;
-`tests/scripts/metaops.lua` and `tests/scripts/table_ops_54.lua` tested piccolo's own
+`tests/scripts/metaops.lua` and `tests/scripts/table_ops_54.lua` tested lunita's own
 `table.concat`, which now follows PUC.
 
 ## Measurements
@@ -165,7 +165,7 @@ and 0.024 µs at opt-level z.
 
 ## Notes for gc-arena and open decisions
 
-- **Mark queues are untracked, and piccolo reserves room for them.** gc-arena keeps the objects
+- **Mark queues are untracked, and lunita reserves room for them.** gc-arena keeps the objects
   it has yet to trace in two `Vec`s outside `Metrics` that never shrink: `gray` takes white
   objects as they are reached, `gray_again` black objects written to during marking. An object is
   gray while queued and enters a queue only from another color, so it is at most once in each at
@@ -184,7 +184,7 @@ and 0.024 µs at opt-level z.
   (M9b). With it, the peak real heap of every case stays within the 32 MiB limit (M3b: 20.00 MiB,
   was 33.98). Counting the queues in `Metrics` in gc-arena would make the reserve unnecessary.
 - **Garbage counts against the memory limit** until it is collected, and gc-arena can only collect
-  between `Lua::enter` calls, so piccolo cannot collect at the moment it would refuse an
+  between `Lua::enter` calls, so lunita cannot collect at the moment it would refuse an
   allocation. It paces the collector by the limit: once the heap passes a quarter of the limit,
   each cycle starts as soon as the last one ends and collects five bytes for each byte allocated
   (gc-arena's default waits for the heap to grow by half and collects one and two thirds of a
@@ -230,7 +230,7 @@ Found by the reviews and left as they are, each a decision rather than a fix:
   `Function::compose`) are not counted in the mark queue reserve: only the host makes them.
 - A thread already running as the top of one executor can be given to another; a resume whose
   arguments do not fit kills the coroutine where PUC fails the resume.
-- `piccolo-util`'s `UserMethods::new` and the serde serializer `unwrap()` table sets that a
+- `lunita-util`'s `UserMethods::new` and the serde serializer `unwrap()` table sets that a
   memory limit can refuse; a host loading them under a limit would see a panic there.
 - `fuzz/seeds/` is generated from `tests/limits.rs` and committed so that the fuzzer starts
   without a build step; `tests/data/r2-collisions.txt` (400 KB) could be generated at test time.

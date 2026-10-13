@@ -9,11 +9,11 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.3.3"
+version = "0.1.0"
 edition = "2021"
-authors = ["kyren <catherine@kyju.org>"]
+authors = ["すごいジャン <me@sugoijan.dev>", "kyren <catherine@kyju.org>"]
 license = "MIT"
-repository = "https://github.com/kyren/piccolo"
+repository = "https://github.com/sugoijan/lunita"
 
 [workspace.dependencies]
 # Without `runtime-rng`, which needs `getrandom` (and JS imports on wasm32-unknown-unknown).
@@ -25,11 +25,11 @@ hashbrown = { version = "0.14", features = ["raw"] }
 serde = "1.0"
 thiserror = "1.0"
 
-piccolo = { path = "./", version = "0.3.3" }
+lunita = { path = "./", version = "0.1.0" }
 
 [package]
-name = "piccolo"
-description = "Stackless Lua VM implemented in pure Rust"
+name = "lunita"
+description = "Stackless Lua VM in pure Rust, hardened for untrusted scripts (a fork of piccolo)"
 readme = "README.md"
 version.workspace = true
 edition.workspace = true

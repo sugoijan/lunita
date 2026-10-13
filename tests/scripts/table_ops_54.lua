@@ -66,7 +66,7 @@ local bad = setmetatable({}, {__len = function() return 'x' end})
 errors("object length is not an integer", table.insert, bad, 1)
 
 -- `__index` yielding inside a coroutine (PUC-Rio Lua cannot yield there).
-if coroutine.yieldto then -- piccolo only: PUC-Rio Lua cannot yield there
+if coroutine.yieldto then -- lunita only: PUC-Rio Lua cannot yield there
 local yielding = setmetatable({}, {
     __index = function(_, k) coroutine.yield(k); return k * 10 end,
     __len = function() return 3 end,

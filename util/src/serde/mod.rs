@@ -2,7 +2,7 @@ pub mod de;
 pub mod markers;
 pub mod ser;
 
-use piccolo::{LimitError, Lua};
+use lunita::{LimitError, Lua};
 
 pub use self::{
     de::from_value,

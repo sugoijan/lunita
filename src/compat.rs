@@ -7,7 +7,7 @@ use gc_arena::Collect;
 /// Which Lua version to follow where versions differ, see [`Lua::set_compat`](crate::Lua::set_compat).
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash)]
 pub enum Compat {
-    /// piccolo's own behaviour, which mostly follows Lua 5.4.
+    /// lunita's own behaviour, which mostly follows Lua 5.4.
     #[default]
     Default,
     /// Behave like PUC-Rio Lua 5.1.5 where versions differ. Set with

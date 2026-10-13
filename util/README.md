@@ -1,7 +1,7 @@
-## piccolo-util - Helper crate that makes using the `piccolo` crate easier.
+## lunita-util - Helper crate that makes using the `lunita` crate easier.
 
-This crate is not necessary to use `piccolo`, and is a place for things that are
-useful but may be more opinionated or limited than the core `piccolo` library.
+This crate is not necessary to use `lunita`, and is a place for things that are
+useful but may be more opinionated or limited than the core `lunita` library.
 
 ## Features
 

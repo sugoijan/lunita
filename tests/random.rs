@@ -1,4 +1,4 @@
-use piccolo::{Closure, Executor, Lua};
+use lunita::{Closure, Executor, Lua};
 
 fn random_values(seed: Option<u64>) -> Vec<f64> {
     let mut lua = Lua::core();

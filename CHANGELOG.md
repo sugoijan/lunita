@@ -1,19 +1,21 @@
-## Unreleased (this fork)
+## lunita 0.1.0 (unreleased)
 
-Hardening for running untrusted Lua (StepMania noteskins) inside a game, natively and on
-`wasm32-unknown-unknown` with `panic = "abort"`: no script may crash the host, take unbounded
-memory or time in one step, or behave differently between platforms. gc-arena stays at the pinned
-revision. `COMPATIBILITY.md` lists the differences from PUC-Rio Lua kept on purpose,
-`docs/hardening-notes.md` the tests, harnesses, measurements and open decisions.
+`lunita` is a fork of piccolo 0.3.3, published under its own name. Hardening for running
+untrusted Lua (StepMania noteskins) inside a game, natively and on `wasm32-unknown-unknown` with
+`panic = "abort"`: no script may crash the host, take unbounded memory or time in one step, or
+behave differently between platforms. gc-arena stays at the pinned revision. `COMPATIBILITY.md`
+lists the differences from PUC-Rio Lua kept on purpose, `docs/hardening-notes.md` the tests,
+harnesses, measurements and open decisions. The sections below this one are piccolo's own
+changelog, kept for the history.
 
 ### Added
 
-* Memory and string length limits (`Lua::set_limits`, the `piccolo::limits` module), checked
+* Memory and string length limits (`Lua::set_limits`, the `lunita::limits` module), checked
   before every allocation a script controls (stacks, frames, table growth, concatenation,
   varargs, buffers, the compiler's budget per token and literal byte); a limit error stops the
   executor and cannot be caught by Lua. A reserve for gc-arena's mark queues and a pacing of the
   collector by the limit keep the real heap within it.
-* Fuel charged in proportion to work, with a documented cost model (`piccolo::fuel::cost`) and a
+* Fuel charged in proportion to work, with a documented cost model (`lunita::fuel::cost`) and a
   fuel debt for code without access to `Fuel` (`Context::charge_fuel`); frames capped at
   `MAX_FRAMES` (a catchable "stack overflow"); resumable `table.insert`/`remove`/`concat` and
   string matching that suspend between attempts.
@@ -22,7 +24,7 @@ revision. `COMPATIBILITY.md` lists the differences from PUC-Rio Lua kept on purp
   re-entry). `rand` and `getrandom` are gone: `math.random` is PUC 5.4's xoshiro256**, seeded
   by `Lua::set_random_seed` (0 by default), and `ahash` is built without `runtime-rng`.
 * `Lua::with_hash_seed(seed)`: strings and table keys hashed with keys derived from a host seed
-  (`piccolo::hash`), so that scripts cannot make colliding keys.
+  (`lunita::hash`), so that scripts cannot make colliding keys.
 * `Compat::Lua51` (`Lua::set_compat`): Lua 5.1 number formatting, parsing and arithmetic,
   metamethod rules and library behaviour, documented on the enum and tested byte for byte
   against PUC 5.1.5 (`tests/lua51/`).
@@ -36,13 +38,16 @@ revision. `COMPATIBILITY.md` lists the differences from PUC-Rio Lua kept on purp
 
 ### Changed, for hosts written against upstream 0.3.3
 
+* The crates are `lunita` and `lunita-util`, at version 0.1.0: `use piccolo::` becomes
+  `use lunita::`, or the dependency keeps the old path with
+  `piccolo = { package = "lunita", version = "0.1" }`.
 * `Table::set_field` and `Context::set_global` return `Result<Value, LimitError>`; the library
   loaders `load_base`, `load_coroutine`, `load_math` (and its parts), `load_string`,
   `load_table`, `load_io`, `Lua::load_core` and `Lua::load_io` return `Result<(), LimitError>`.
   A host's own loader becomes `fn load(ctx: Context<'_>) -> Result<(), LimitError>` with `?` on
   each call, and `lua.enter(load)` gives the result (on a fresh instance without limits nothing
   can be refused). `Lua::core()` and `Lua::full()` are unchanged.
-* `piccolo-util`: `UserMethods::add` and `add_write` return `Result<bool, LimitError>`,
+* `lunita-util`: `UserMethods::add` and `add_write` return `Result<bool, LimitError>`,
   `LuaSerdeExt::load_serde` returns `Result<(), LimitError>`.
 * `Lua::set_compat` goes before `load_core`: `_VERSION` is set when the base library loads.
   `FunctionPrototype::compile` (and `Closure::load`) in Lua51 mode compile integer literals past
@@ -65,7 +70,7 @@ revision. `COMPATIBILITY.md` lists the differences from PUC-Rio Lua kept on purp
   `limit_exceeded`, `charge_fuel`, `new_string`, `compat`; `Lua::total_memory`,
   `mark_queue_reserve`, `limits`; `Error::limit_error`, `ExternError::limit_error`,
   `RuntimeError::limit_error`.
-* `piccolo::string::InternGrowth` is gone: interner growth is a `piccolo::table::Growth` (same
+* `lunita::string::InternGrowth` is gone: interner growth is a `lunita::table::Growth` (same
   fields). `closure::UpValueInner` is a struct (with a `Lock` of the state) instead of a
   `RefLock`; code using `UpValue::get` and `set` is unaffected.
 * `MetaOperatorError` has two new variants, `ChainTooLong(MetaMethod)` and `Loop(MetaMethod)`
@@ -107,7 +112,7 @@ revision. `COMPATIBILITY.md` lists the differences from PUC-Rio Lua kept on purp
 * The memory limit refuses allocations at 15/16 of itself, less the mark-queue reserve, because
   gc-arena's mark queues and a few buffers are untracked. Past three quarters of the limit a
   collection is finished before the next mutation and charged to the next step.
-* `%a` is formatted by piccolo, since the C libraries differ; `math.random` is xoshiro256**.
+* `%a` is formatted by lunita, since the C libraries differ; `math.random` is xoshiro256**.
 * VM runtime errors keep piccolo's wording and `pcall` returns them as userdata, not as positioned
   strings; library errors are positioned and name the function as registered.
 

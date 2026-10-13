@@ -713,7 +713,7 @@ impl Generator<'_, '_> {
 
 #[cfg(test)]
 mod tests {
-    use piccolo::{Closure, Lua};
+    use lunita::{Closure, Lua};
 
     /// Most generated programs must compile, or the target only fuzzes the parser.
     #[test]

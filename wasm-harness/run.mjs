@@ -22,7 +22,7 @@ import { performance } from 'node:perf_hooks';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const wasmPath =
   process.env.HARNESS_WASM ??
-  join(root, 'wasm-harness/target/wasm32-unknown-unknown/release/piccolo_wasm_harness.wasm');
+  join(root, 'wasm-harness/target/wasm32-unknown-unknown/release/lunita_wasm_harness.wasm');
 const module = new WebAssembly.Module(readFileSync(wasmPath));
 if (WebAssembly.Module.imports(module).length !== 0) {
   throw new Error('the harness module has imports');

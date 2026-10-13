@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use piccolo::{table::NextValue, Lua, Table, Value};
+use lunita::{table::NextValue, Lua, Table, Value};
 
 #[test]
 fn test_table_iter() {
@@ -18,10 +18,10 @@ fn test_table_iter() {
 
         let mut pairs = table.iter().collect::<Vec<_>>();
         pairs.sort_by(|&(ak, _), &(bk, _)| match (ak, bk) {
-            (piccolo::Value::Integer(a), piccolo::Value::Integer(b)) => a.cmp(&b),
-            (piccolo::Value::Integer(_), piccolo::Value::String(_)) => Ordering::Less,
-            (piccolo::Value::String(_), piccolo::Value::Integer(_)) => Ordering::Greater,
-            (piccolo::Value::String(a), piccolo::Value::String(b)) => a.cmp(&b),
+            (lunita::Value::Integer(a), lunita::Value::Integer(b)) => a.cmp(&b),
+            (lunita::Value::Integer(_), lunita::Value::String(_)) => Ordering::Less,
+            (lunita::Value::String(_), lunita::Value::Integer(_)) => Ordering::Greater,
+            (lunita::Value::String(a), lunita::Value::String(b)) => a.cmp(&b),
             _ => unreachable!(),
         });
 

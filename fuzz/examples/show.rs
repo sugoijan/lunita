@@ -4,7 +4,7 @@
 use std::time::Instant;
 
 use arbitrary::Unstructured;
-use piccolo::{Closure, Compat, Executor, Fuel};
+use lunita::{Closure, Compat, Executor, Fuel};
 
 fn main() {
     let path = std::env::args().nth(1).expect("an input file");
@@ -14,12 +14,12 @@ fn main() {
         Ok(b) if b & 1 == 1 => Compat::Lua51,
         _ => Compat::Default,
     };
-    let source = piccolo_fuzz::grammar::program(&mut u, piccolo_fuzz::seeds()).unwrap();
+    let source = lunita_fuzz::grammar::program(&mut u, lunita_fuzz::seeds()).unwrap();
     println!("-- {compat:?}\n{source}");
     if std::env::args().nth(2).as_deref() != Some("--run") {
         return;
     }
-    let mut lua = piccolo_fuzz::new_lua(compat);
+    let mut lua = lunita_fuzz::new_lua(compat);
     let executor = lua.try_enter(|ctx| {
         let closure = Closure::load(ctx, Some("show"), source.as_bytes())?;
         Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
@@ -31,15 +31,15 @@ fn main() {
     let (mut used, mut steps, mut longest) = (0i64, 0, std::time::Duration::ZERO);
     let start = Instant::now();
     loop {
-        let mut fuel = Fuel::with(piccolo_fuzz::FUEL_PER_STEP);
+        let mut fuel = Fuel::with(lunita_fuzz::FUEL_PER_STEP);
         let t = Instant::now();
         let finished = lua
             .enter(|ctx| ctx.fetch(&executor).step(ctx, &mut fuel))
             .unwrap();
         longest = longest.max(t.elapsed());
-        used += i64::from(piccolo_fuzz::FUEL_PER_STEP - fuel.remaining());
+        used += i64::from(lunita_fuzz::FUEL_PER_STEP - fuel.remaining());
         steps += 1;
-        if finished || used >= piccolo_fuzz::FUEL_BUDGET {
+        if finished || used >= lunita_fuzz::FUEL_BUDGET {
             break;
         }
     }

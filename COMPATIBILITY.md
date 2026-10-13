@@ -17,10 +17,10 @@ end, lists where the fork departs from PUC-Rio Lua in both modes and in that one
 "Unimplemented" means there is no implementation (when used, `nil` is found) _or_
 that calling the implementation with the corresponding arguments will error where in PUC-Lua it does not.
 
-"Will Not Implement" is for functions that will not be implemented due to a fundamental difference between piccolo and PUC-Lua.
+"Will Not Implement" is for functions that will not be implemented due to a fundamental difference between lunita and PUC-Lua.
 
 "Low Importance" is for things that, while technically implementable, will
-likely not be implemented due to differences between piccolo and PUC-Lua.
+likely not be implemented due to differences between lunita and PUC-Lua.
 
 **NOTE**: `(a[, b, c])` corresponds to the Lua docs' `(a[, b[, c]])` usage.
 
@@ -56,7 +56,7 @@ likely not be implemented due to differences between piccolo and PUC-Lua.
 | 🔵     | `select(index, args...)`                                       |                                                                                                                                        |       |
 | 🔵     | `setmetatable(table, metatable)`                               |                                                                                                                                        |       |
 | 🔵    | `tonumber(e[, base])`                                          |                                                                                                                                        |       |
-| 🟡     | `tostring(v)`                                                  | piccolo does not use the metatable field `__name` by default, while PUC-Lua does.                                                      |       |
+| 🟡     | `tostring(v)`                                                  | lunita does not use the metatable field `__name` by default, while PUC-Lua does.                                                      |       |
 | 🔵     | `type(v)`                                                      |                                                                                                                                        |       |
 | 🔵    | `_VERSION` (value)                                             |                                                                                                                                        |       |
 | ⚫️    | `warn(msg, args...)`                                           |                                                                                                                                        |       |
@@ -88,7 +88,7 @@ likely not be implemented due to differences between piccolo and PUC-Lua.
 | ❗     | `loadlib(libname, funcname)`         |                                                                                                 |       |
 | ⚫️️   | `path` (value)                       |                                                                                                 |       |
 | ⚫️️   | `preload` (value)                    |                                                                                                 |       |
-| ⚫️️   | `searchers` (value)                  | This implementation will _definitely_ differ from PUC-Lua as piccolo does not support C loaders |       |
+| ⚫️️   | `searchers` (value)                  | This implementation will _definitely_ differ from PUC-Lua as lunita does not support C loaders |       |
 | ⚫️️   | `searchpath(name, path[, sep, rep])` |                                                                                                 |       |
 
 ## String
@@ -99,7 +99,7 @@ likely not be implemented due to differences between piccolo and PUC-Lua.
 | 🔵   | `char(args...)`                   |             |       |
 | ⚫️️   | `dump(function[, strip])`         |             |       |
 | 🔵     | `find(s, pattern[, init, plain])` | A match attempt fails with "pattern too complex" past 10^5 matcher steps or 200 nested calls (PUC has no step cap). |       |
-| 🔵     | `format(formatstring, args...)`   | `%a` is formatted by piccolo (glibc's style); see the end of this file. |       |
+| 🔵     | `format(formatstring, args...)`   | `%a` is formatted by lunita (glibc's style); see the end of this file. |       |
 | 🔵     | `gmatch(s, pattern[, init])`      | Same step cap as `find`. |       |
 | 🔵     | `gsub(s, pattern, repl[, n])`     | Same step cap as `find`. |       |
 | 🔵     | `len(s)`                          |             |       |
@@ -241,22 +241,22 @@ implemented nor are there plans to implement due to differences between the impl
 
 With `Compat::Lua51`, against PUC 5.1.5 (results and messages):
 
-- **Integers.** piccolo has 64-bit integers in both modes. In 5.1 mode, literals and arithmetic
+- **Integers.** lunita has 64-bit integers in both modes. In 5.1 mode, literals and arithmetic
   keep them within 2^53, where they are exactly the floats 5.1 holds, but hex literals from
   2^63 wrap (`0xffffffffffffffff` is -1, 1.8446744073709552e19 in 5.1), `math.maxinteger`,
   `math.mininteger`, `math.tointeger`, `math.type` and `math.ult` exist, the 5.4 bitwise
   operators give any integer, and an integer `for` loop counts past 2^53 exactly (5.1 stalls
   there).
-- **Syntax.** piccolo accepts Lua 5.4 syntax in both modes (`//`, bitwise operators, `goto`,
+- **Syntax.** lunita accepts Lua 5.4 syntax in both modes (`//`, bitwise operators, `goto`,
   `<const>`, integer literals); 5.1 rejects it.
 - **-0 constants.** PUC 5.1 merges the constants 0 and -0 within a function, so a `-0` (or a
-  folded `0 * -1`) after a `0` in the same function is 0, and a `0` after a `-0` is -0; piccolo
+  folded `0 * -1`) after a `0` in the same function is 0, and a `0` after a `-0` is -0; lunita
   keeps each sign.
 - **`load`** accepts strings in 5.1 mode (5.1's only takes functions); the host is expected to add
   `loadstring`.
 - **Pattern recursion** is capped at 200 levels in 5.1 mode too (5.1 has no cap and overflows the
   C stack).
-- **`%a`** in `string.format` is formatted by piccolo in glibc's style (subnormals with a zero
+- **`%a`** in `string.format` is formatted by lunita in glibc's style (subnormals with a zero
   leading digit and `p-1022`, a precision rounding to nearest, ties to even on the last digit
   kept, without renormalizing); Apple's libc prints subnormals normalized and rounds ties
   differently, so the C libraries differ there too.
@@ -268,14 +268,14 @@ With `Compat::Lua51`, against PUC 5.1.5 (results and messages):
 In both modes, against PUC 5.1.5 and 5.4.9:
 
 - **Runtime errors of the VM** (indexing nil, arithmetic or concatenation on bad types, calling a
-  non-function, comparing incompatible values) are piccolo's `RuntimeError`s: `pcall` returns them
+  non-function, comparing incompatible values) are lunita's `RuntimeError`s: `pcall` returns them
   as a userdata whose `tostring` is the error with its causes ("operator error: ..."), without a
   position or PUC's wording ("attempt to index local 'x' (a nil value)"). This is piccolo's design
   and the largest visible difference left; making them positioned strings is a possible next
   change.
-- **Library error messages** name the function as piccolo registered it ('floor'), where PUC names
+- **Library error messages** name the function as lunita registered it ('floor'), where PUC names
   a function called from `pcall` or as a metamethod '?', 5.4 qualifies it ('math.floor'), and both
-  count arguments from `self` in method calls (`("x"):rep({})` is argument #2 in piccolo, #1 in
+  count arguments from `self` in method calls (`("x"):rep({})` is argument #2 in lunita, #1 in
   PUC).
 - **Missing library pieces** (the host adds what it needs): `_G`, `coroutine.wrap`,
   `coroutine.isyieldable`, `coroutine.close`, `collectgarbage` options other than "count", the
@@ -289,7 +289,7 @@ In both modes, against PUC 5.1.5 and 5.4.9:
   equal long strings is the same (PUC's `pm.lua` and `strings.lua` expect them to differ).
 - **Table iteration** follows insertion order (deterministic on every platform); PUC's follows
   its hash layout. `#t` on tables with holes may find a different border.
-- **`tostring`** of tables, functions and threads has piccolo's format (`<table 0x...>`, PUC's is
+- **`tostring`** of tables, functions and threads has lunita's format (`<table 0x...>`, PUC's is
   `table: 0x...`) and ignores `__name`; `print` and `string.format` take any `__tostring` result
   (`tostring` itself checks it as each version does).
 - **Default mode against 5.4.9** (piccolo's choice, kept so far): inserting into a table whose
@@ -307,4 +307,4 @@ In both modes, against PUC 5.1.5 and 5.4.9:
 
 Each of these is marked where it lives in the code with a comment holding `DELIBERATE(puc)` and a
 pointer here, so that a reviewer does not report it (`grep -rn 'DELIBERATE(' src` lists them;
-`DELIBERATE(cost)` marks the cost-model choices documented on `piccolo::fuel::cost`).
+`DELIBERATE(cost)` marks the cost-model choices documented on `lunita::fuel::cost`).

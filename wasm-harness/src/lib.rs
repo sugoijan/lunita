@@ -10,12 +10,12 @@
 //! - `step()` runs one step with 1,000 fuel: 0 if still running, 1 if the chunk returned, 2 on an
 //!   error, 3 on the limit error;
 //! - `step_fuel()` is the fuel the last step used, `tracked_memory()` the bytes gc-arena and
-//!   piccolo track, and `compile_work()` the compiler's work on the source (see
+//!   lunita track, and `compile_work()` the compiler's work on the source (see
 //!   `CompileBudget::work`).
 
 use std::cell::RefCell;
 
-use piccolo::{
+use lunita::{
     compiler::{CompileBudget, CompileLimits},
     Callback, CallbackReturn, Closure, Executor, Fuel, FunctionPrototype, Limits, Lua,
     StashedExecutor, Value, Variadic,

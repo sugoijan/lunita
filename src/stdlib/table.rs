@@ -220,7 +220,7 @@ impl<'gc> TableOp<'gc> {
         let lua51 = is_lua51(ctx);
         match self.kind {
             OpKind::Insert => {
-                // DELIBERATE(puc): PUC-Rio Lua wraps around here; piccolo errors (see COMPATIBILITY.md).
+                // DELIBERATE(puc): PUC-Rio Lua wraps around here; lunita errors (see COMPATIBILITY.md).
                 let Some(mut e) = length.checked_add(1) else {
                     return Err(error("table is too long to insert into"));
                 };

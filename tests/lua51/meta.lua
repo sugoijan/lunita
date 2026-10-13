@@ -33,7 +33,7 @@ show(select('#', pairs({})), select('#', ipairs({})), (select(3, ipairs({}))))
 show(select('#', next({})), select('#', next({1}, 1)))
 
 print('__eq, __lt, __le')
--- (VM errors keep piccolo's wording: only whether they are raised is compared.)
+-- (VM errors keep lunita's wording: only whether they are raised is compared.)
 local function f() return true end
 local a, b = setmetatable({}, {__eq = f}), setmetatable({}, {__eq = f})
 show(a == b, a == {}, setmetatable({}, {__eq = f}) == setmetatable({}, {__eq = function() return true end}))

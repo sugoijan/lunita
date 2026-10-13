@@ -1,7 +1,7 @@
 //! Deeply nested and long chained syntax must either compile or fail with a compile error, never
 //! overflow the native stack in the parser, the compiler, or when dropping the syntax tree.
 
-use piccolo::{Closure, Executor, Lua};
+use lunita::{Closure, Executor, Lua};
 
 // Debug builds use several times more stack per level than release builds (about 3 MiB at the
 // deepest accepted nesting, 650 KiB in release), so run on a thread with a known stack size.

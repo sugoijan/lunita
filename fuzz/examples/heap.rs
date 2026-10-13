@@ -11,14 +11,14 @@ fn main() {
         }
     }
     paths.sort();
-    let start = piccolo_fuzz::heap_in_use();
+    let start = lunita_fuzz::heap_in_use();
     println!("{} inputs, heap at start {start}", paths.len());
     for (i, path) in paths.iter().enumerate() {
         let data = std::fs::read(path).unwrap();
-        let (compat, source) = piccolo_fuzz::split_compat(&data);
-        piccolo_fuzz::run(source, compat);
+        let (compat, source) = lunita_fuzz::split_compat(&data);
+        lunita_fuzz::run(source, compat);
         if (i + 1) % 1000 == 0 || i + 1 == paths.len() {
-            println!("{}: heap {}", i + 1, piccolo_fuzz::heap_in_use());
+            println!("{}: heap {}", i + 1, lunita_fuzz::heap_in_use());
         }
     }
 }

@@ -221,7 +221,7 @@ pub fn unop_const_fold<S: AsRef<[u8]>>(
     }
     match unop {
         // Lua 5.1 only has floats, where -0 is a negative zero.
-        // DELIBERATE(puc): PUC 5.1 merges the constants 0 and -0 within a function; piccolo keeps
+        // DELIBERATE(puc): PUC 5.1 merges the constants 0 and -0 within a function; lunita keeps
         // each sign (see COMPATIBILITY.md).
         UnaryOperator::Minus if matches!(cons, Constant::Integer(0)) => None,
         UnaryOperator::Minus if is_number(cons) => cons.negate().filter(is_compat_independent),

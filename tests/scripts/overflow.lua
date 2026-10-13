@@ -14,8 +14,8 @@ do
     end)
 
     -- PRLua wraps the index and inserts at math.mininteger;
-    -- piccolo throws an error instead
-    -- piccolo's own behaviour, kept on purpose (see COMPATIBILITY.md): the PUC branch is not taken.
+    -- lunita throws an error instead
+    -- lunita's own behaviour, kept on purpose (see COMPATIBILITY.md): the PUC branch is not taken.
     if true then
         assert(not res, "insert at maxinteger + 1 wrapped instead of erroring")
     else
@@ -31,8 +31,8 @@ do
         return t
     end)
     -- PRLua wraps the end index and silently doesn't shift interior elements
-    -- piccolo throws an error instead
-    -- piccolo's own behaviour, kept on purpose (see COMPATIBILITY.md): the PUC branch is not taken.
+    -- lunita throws an error instead
+    -- lunita's own behaviour, kept on purpose (see COMPATIBILITY.md): the PUC branch is not taken.
     if true then
         assert(not res, "insert with length maxinteger wrapped instead of erroring")
     else
@@ -69,7 +69,7 @@ do
         assert(v == nil)
     end
 
-    -- piccolo's own behaviour, kept on purpose (see COMPATIBILITY.md): the PUC branch is not taken.
+    -- lunita's own behaviour, kept on purpose (see COMPATIBILITY.md): the PUC branch is not taken.
     if true then
         -- This hangs PRLua, but should always error (the index is negative...)
         local res, _ = pcall(function()

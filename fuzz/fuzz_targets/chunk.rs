@@ -5,6 +5,6 @@
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    let (compat, source) = piccolo_fuzz::split_compat(data);
-    piccolo_fuzz::run(source, compat);
+    let (compat, source) = lunita_fuzz::split_compat(data);
+    lunita_fuzz::run(source, compat);
 });

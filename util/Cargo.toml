@@ -1,6 +1,6 @@
 [package]
-name = "piccolo-util"
-description = "Utilities for the `piccolo` library"
+name = "lunita-util"
+description = "Utilities for the `lunita` library"
 readme = "README.md"
 version.workspace = true
 edition.workspace = true
@@ -12,7 +12,7 @@ repository.workspace = true
 serde = { workspace = true, optional = true }
 thiserror.workspace = true
 gc-arena.workspace = true
-piccolo.workspace = true
+lunita.workspace = true
 
 [features]
 default = ["serde"]

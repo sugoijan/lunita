@@ -1,4 +1,4 @@
-use piccolo::{
+use lunita::{
     Callback, CallbackReturn, Closure, Compat, Executor, ExecutorMode, ExternError, Fuel, Lua,
 };
 

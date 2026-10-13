@@ -31,7 +31,7 @@ use std::{
 use cpu_time::ThreadTime;
 use peak_alloc::PeakAlloc;
 
-use piccolo::{
+use lunita::{
     compiler::{CompileBudget, CompileLimits},
     Callback, CallbackReturn, Closure, Executor, Fuel, FunctionPrototype, Limits, Lua,
     StashedExecutor, Value, Variadic,
@@ -506,7 +506,7 @@ fn cases() -> Vec<Case> {
         // Found in review: strings were hashed with fixed keys, so 65,536 strings whose hashes
         // share their low 16 bits could be computed offline, making the interner's rehash take
         // 37 ms in one step. These strings collide under those keys (see `tests/hash_seed.rs`);
-        // piccolo's keys come from a seed (seed 0 here), under which they do not.
+        // lunita's keys come from a seed (seed 0 here), under which they do not.
         value_case(
             "R2a",
             format!(

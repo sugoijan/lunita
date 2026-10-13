@@ -1,4 +1,4 @@
-use piccolo::{Closure, Executor, ExternError, Lua};
+use lunita::{Closure, Executor, ExternError, Lua};
 
 #[test]
 fn weak_threads_close() -> Result<(), ExternError> {

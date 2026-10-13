@@ -1,5 +1,5 @@
 -- The math library (except random, whose generator differs, and the functions Lua 5.4 dropped,
--- which piccolo leaves to the host), comparisons and integer-valued floats.
+-- which lunita leaves to the host), comparisons and integer-valued floats.
 
 local function show(...)
     local t = {}

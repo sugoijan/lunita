@@ -6,7 +6,7 @@
 
 use std::{cell::RefCell, fs, rc::Rc};
 
-use piccolo::{Callback, CallbackReturn, Closure, Compat, Executor, Lua, String, Table, UserData};
+use lunita::{Callback, CallbackReturn, Closure, Compat, Executor, Lua, String, Table, UserData};
 
 fn run_script(name: &str, source: &[u8]) -> Vec<u8> {
     // The mode is set before the library loads, as a host does (`_VERSION` is set by it).
@@ -112,7 +112,7 @@ fn lua51_scripts() {
                 .position(|(a, e)| a != e)
                 .unwrap_or_else(|| actual.lines().count().min(expected.lines().count()));
             failures.push(format!(
-                "{name}: output differs at line {}:\n  piccolo: {:?}\n  PUC 5.1: {:?}",
+                "{name}: output differs at line {}:\n  lunita: {:?}\n  PUC 5.1: {:?}",
                 line + 1,
                 actual.lines().nth(line).unwrap_or("<end>"),
                 expected.lines().nth(line).unwrap_or("<end>"),

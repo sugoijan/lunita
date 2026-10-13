@@ -1,12 +1,12 @@
 //! Frames and stacks under a script's control: recursion is a catchable "stack overflow",
 //! implicit stack growth is checked, and the executor's threads are reset together.
 
-use piccolo::{
+use lunita::{
     Callback, CallbackReturn, Closure, Compat, Executor, ExternError, Fuel, Limits, Lua, Value,
     Variadic,
 };
 
-fn run<R: for<'gc> piccolo::FromMultiValue<'gc>>(
+fn run<R: for<'gc> lunita::FromMultiValue<'gc>>(
     lua: &mut Lua,
     source: &str,
 ) -> Result<R, ExternError> {

@@ -151,7 +151,7 @@ impl<'gc, const N: usize> From<MetaCall<'gc, N>> for MetaResult<'gc, N> {
 
 #[derive(Debug, Clone, Error)]
 // DELIBERATE(puc): the VM's runtime errors (indexing nil, arithmetic on bad types, calling a
-// non-function, ...) are piccolo's `RuntimeError`s, without a position or PUC's wording; the
+// non-function, ...) are lunita's `RuntimeError`s, without a position or PUC's wording; the
 // maintainer left positioned strings for later (see COMPATIBILITY.md).
 pub enum MetaOperatorError {
     #[error("could not call metamethod {}: {}", .0.name(), .1)]

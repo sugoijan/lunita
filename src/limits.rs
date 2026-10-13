@@ -15,11 +15,11 @@
 //!
 //! # What the memory limit counts
 //!
-//! Everything gc-arena tracks plus the external allocations piccolo reports (stacks, table
+//! Everything gc-arena tracks plus the external allocations lunita reports (stacks, table
 //! storage, buffers held across calls into Lua), which [`Lua::total_memory`](crate::Lua::total_memory)
 //! reports. Allocations are refused once they would take the limit less a reserve for gc-arena's
 //! mark queues ([`Lua::mark_queue_reserve`](crate::Lua::mark_queue_reserve)) and less 1/16 of it
-//! for the allocations piccolo makes without tracking, so that the real heap stays within the
+//! for the allocations lunita makes without tracking, so that the real heap stays within the
 //! limit (see [`Limits::memory`]). Garbage counts until it is collected: past a quarter of the
 //! limit the instance paces gc-arena's collector to collect five bytes for each byte allocated,
 //! and past three quarters [`Lua::enter`](crate::Lua::enter) first finishes a collection, charged
@@ -54,7 +54,7 @@ use crate::{
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Limits {
     /// Bytes the instance may hold: everything gc-arena tracks plus the external allocations
-    /// piccolo reports (stacks, table storage, buffers).
+    /// lunita reports (stacks, table storage, buffers).
     ///
     /// Allocations are refused once they would take this, plus a reserve for gc-arena's mark
     /// queues, past `memory - memory / 16`, so that the real heap stays within `memory`.
@@ -69,7 +69,7 @@ pub struct Limits {
     /// nothing for strings. Userdata, callbacks made with [`Callback::new`] rather than
     /// [`Callback::from_fn_with`] and the function list a composed function holds are not
     /// counted: only the host makes them. The remaining 1/16 is headroom for the allocations
-    /// piccolo makes without tracking, such as
+    /// lunita makes without tracking, such as
     /// the buffer a concatenation builds its result in (up to the string length limit).
     ///
     /// [`Lua::mark_queue_reserve`]: crate::Lua::mark_queue_reserve

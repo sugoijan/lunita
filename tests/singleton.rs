@@ -1,7 +1,7 @@
 //! A singleton may ask the registry for another one while it is created.
 
 use gc_arena::{Collect, Rootable};
-use piccolo::{Context, Lua, Singleton};
+use lunita::{Context, Lua, Singleton};
 
 #[derive(Collect)]
 #[collect(require_static)]

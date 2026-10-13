@@ -12,7 +12,7 @@ use std::{
 };
 
 use peak_alloc::PeakAlloc;
-use piccolo::{
+use lunita::{
     Callback, CallbackReturn, Closure, Compat, Executor, Fuel, Limits, Lua, Value, Variadic,
 };
 
@@ -186,7 +186,7 @@ mod tests {
             let _ = u.arbitrary::<u8>();
             let source = super::grammar::program(&mut u, super::seeds()).unwrap();
             let start = Instant::now();
-            super::run(source.as_bytes(), piccolo::Compat::Default);
+            super::run(source.as_bytes(), lunita::Compat::Default);
             let t = start.elapsed();
             let slot = if source.contains("\ndo\n") {
                 &mut with
@@ -220,7 +220,7 @@ mod tests {
         ] {
             let start = Instant::now();
             for _ in 0..20 {
-                super::run(source, piccolo::Compat::Default);
+                super::run(source, lunita::Compat::Default);
             }
             println!(
                 "{:?}: {:?} a run",

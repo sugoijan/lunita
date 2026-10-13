@@ -1,5 +1,5 @@
 use gc_arena::{Collect, Rootable};
-use piccolo::{Callback, CallbackReturn, Context, LimitError, Singleton, Table, UserData};
+use lunita::{Callback, CallbackReturn, Context, LimitError, Singleton, Table, UserData};
 
 #[derive(Collect)]
 #[collect(no_drop)]

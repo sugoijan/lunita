@@ -1,5 +1,5 @@
 [package]
-name = "piccolo-fuzz"
+name = "lunita-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2021"
@@ -11,9 +11,9 @@ cargo-fuzz = true
 arbitrary = "1"
 libfuzzer-sys = "0.4"
 peak_alloc = "0.3"
-piccolo = { path = ".." }
+lunita = { path = ".." }
 
-# Not part of piccolo's workspace.
+# Not part of lunita's workspace.
 [workspace]
 members = ["."]
 
