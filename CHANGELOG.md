@@ -1,3 +1,12 @@
+## lunita 0.1.2 (unreleased)
+
+### Fixed
+
+* `table.insert` and `table.remove` shift at most 100,000 values of the array part in one step;
+  a larger shift takes the suspending path, one value per fuel. The fast path moved the whole
+  array at once and charged it after the fact, so a step's fuel grew with the table (a 32 MiB
+  table holds two million values).
+
 ## lunita 0.1.1 (2026-10-14)
 
 ### Fixed

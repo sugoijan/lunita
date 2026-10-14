@@ -573,21 +573,22 @@ fn table_insert<'gc>(
     let raw = is_raw(ctx, table);
 
     if raw {
-        // Try the fast path in the array part.
+        // Try the fast path in the array part, for a shift one step can take.
         let raw_table = &mut table.into_inner().borrow_mut(&ctx).raw_table;
         let len = charged_length(raw_table, exec.fuel());
-        match array_insert_shift(raw_table, len, position, value, |growth| {
-            ctx.check_growth(growth)
-        }) {
-            RawArrayOpResult::Success(()) => {
-                let shifted =
-                    len.saturating_sub(position.map_or(len, |p| p.saturating_sub(1) as usize));
-                exec.fuel()
-                    .consume(count_fuel(FUEL_PER_SHIFTED_ITEM, shifted));
-                return Ok(CallbackReturn::Return);
+        let shifted = shifted_values(len, position);
+        if shifted <= MAX_FAST_SHIFT {
+            match array_insert_shift(raw_table, len, position, value, |growth| {
+                ctx.check_growth(growth)
+            }) {
+                RawArrayOpResult::Success(()) => {
+                    exec.fuel()
+                        .consume(count_fuel(FUEL_PER_SHIFTED_ITEM, shifted));
+                    return Ok(CallbackReturn::Return);
+                }
+                RawArrayOpResult::Limit(err) => return Err(err.into()),
+                _ => {}
             }
-            RawArrayOpResult::Limit(err) => return Err(err.into()),
-            _ => {}
         }
     }
 
@@ -608,16 +609,17 @@ fn table_remove<'gc>(
     let raw = is_raw(ctx, table);
 
     if raw {
-        // Try the fast path in the array part.
+        // Try the fast path in the array part, for a shift one step can take.
         let raw_table = &mut table.into_inner().borrow_mut(&ctx).raw_table;
         let len = charged_length(raw_table, exec.fuel());
-        if let RawArrayOpResult::Success(value) = array_remove_shift(raw_table, len, position) {
+        let shifted = shifted_values(len, position);
+        if shifted <= MAX_FAST_SHIFT
+            && let RawArrayOpResult::Success(value) = array_remove_shift(raw_table, len, position)
+        {
             if is_lua51(ctx) && !(1..=len as i64).contains(&position.unwrap_or(len as i64)) {
                 // Lua 5.1 removes nothing outside of `1..=#t`.
                 return Ok(CallbackReturn::Return);
             }
-            let shifted =
-                len.saturating_sub(position.map_or(len, |p| p.saturating_sub(1) as usize));
             exec.fuel()
                 .consume(count_fuel(FUEL_PER_SHIFTED_ITEM, shifted));
             stack.push_back(value);
@@ -652,6 +654,17 @@ fn table_concat<'gc>(
 }
 
 const FUEL_PER_SHIFTED_ITEM: i32 = 1;
+
+// DELIBERATE(cost): the most values `insert` and `remove` shift in one step. A larger shift takes
+// the suspending path, which moves them one at a time over as many steps as its fuel allows, so
+// that a step's work is bounded whatever the size of the table (the array part of a table at the
+// memory limit can hold millions of values).
+const MAX_FAST_SHIFT: usize = 100_000;
+
+// The values `insert` or `remove` at `position` shifts in a sequence of `len`.
+fn shifted_values(len: usize, position: Option<i64>) -> usize {
+    len.saturating_sub(position.map_or(len, |p| p.saturating_sub(1) as usize))
+}
 
 // The fewest elements pack and unpack move per batch, however little fuel is left.
 const MIN_BATCH_SIZE: usize = 4096;

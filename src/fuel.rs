@@ -121,8 +121,9 @@ pub fn fuel_for(len: usize, units_per_fuel: usize) -> i32 {
 /// helpers) charges a fuel debt with [`Context::charge_fuel`](crate::Context::charge_fuel); the
 /// executor consumes it after every operation (fuel may go negative), and the VM ends its batch
 /// of instructions when the debt uses up the step's fuel or a limit was exceeded. Operations that
-/// are charged after the fact are bounded by the memory limit: the largest is moving the array
-/// part on `table.insert` (at most 2 Mi values, a `memmove` of about 1 ms). One scan is not
+/// are charged after the fact are bounded: the largest is moving the array part on
+/// `table.insert` or `remove`, at most 100,000 values in one step (a larger shift takes the
+/// suspending path, moving one value per fuel over as many steps as it takes). One scan is not
 /// charged at all: `string.format`'s `%s` looking for a zero byte in its argument (and `c_str` in
 /// 5.1 mode), about 92 fuel per ms on a 1 MiB string, bounded by the host's deadline.
 pub mod cost {
