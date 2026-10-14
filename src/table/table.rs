@@ -235,6 +235,19 @@ impl<'gc> Table<'gc> {
         self.0.borrow().raw_table.entries_bound()
     }
 
+    /// The length of this table as a sequence, for a host that walks `1..=length` of it: a border
+    /// ([`Table::length`]) that fits a `usize` and is at most [`Table::entries_bound`], or `None`
+    /// for a table with holes whose border is past its entries.
+    ///
+    /// A sequence has at least `length` entries, where the border of a table with holes can be far
+    /// past them (the powers of two up to `2^61` in the map part make it `2^61`); walking up to
+    /// such a border would take that long, outside any limit of the instance.
+    pub fn sequence_len(self) -> Option<usize> {
+        let raw_table = &self.0.borrow().raw_table;
+        let length = usize::try_from(raw_table.length()).ok()?;
+        (length <= raw_table.entries_bound()).then_some(length)
+    }
+
     /// Returns a border for this table like [`Table::length`], charging fuel for the search to
     /// the running `Executor` (see [`Context::charge_fuel`]).
     pub fn length_charged(self, ctx: Context<'gc>) -> i64 {

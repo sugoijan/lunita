@@ -4,7 +4,10 @@ use std::pin::Pin;
 use gc_arena::Collect;
 
 use super::{
-    args::{arg_error, check_int, check_string, error, is_lua51, opt_int, type_error},
+    args::{
+        arg_error, check_int, check_integer, check_string, check_table, error, is_lua51, opt_int,
+        type_error,
+    },
     continue_sequence,
 };
 use crate::{
@@ -69,16 +72,62 @@ pub fn load_table<'gc>(ctx: Context<'gc>) -> Result<(), LimitError> {
     table.set_field(ctx, "remove", Callback::from_fn(&ctx, table_remove))?;
     table.set_field(ctx, "insert", Callback::from_fn(&ctx, table_insert))?;
 
-    // These sources are part of the library and always compile, unless the instance is already
-    // past its memory limit.
+    // `sort` and `move` are Lua code; a callback checks the arguments as PUC does (with the
+    // caller's position, the mode's rules, and immune to what the script did to the globals) and
+    // then calls it. The sources always compile, unless the instance is already past its memory
+    // limit.
     let data = include_str!("table/sort.lua");
-    if let Ok(func) = Closure::load(ctx, Some("table/sort.lua"), data.as_bytes()) {
-        table.set_field(ctx, "sort", func)?;
+    if let Ok(sort) = Closure::load(ctx, Some("table/sort.lua"), data.as_bytes()) {
+        let sort = Callback::from_fn_with(&ctx, sort, |sort, ctx, _, stack| {
+            let list = check_table(&stack, "sort", 0)?;
+            // Lua 5.4 checks the comparator only when there is something to sort, 5.1 always
+            // does; with a `__len` metamethod the length is the script's, and it is checked too.
+            let has_len = list
+                .metatable()
+                .is_some_and(|mt| !mt.get_value(ctx, MetaMethod::Len).is_nil());
+            let checked = is_lua51(ctx) || has_len || list.length_charged(ctx) > 1;
+            if checked && !matches!(stack.get(1), Value::Nil | Value::Function(_)) {
+                return Err(type_error(&stack, "sort", 1, "function"));
+            }
+            Ok(CallbackReturn::Call {
+                function: (*sort).into(),
+                then: None,
+            })
+        });
+        table.set_field(ctx, "sort", sort)?;
     }
 
     let data = include_str!("table/move.lua");
-    if let Ok(func) = Closure::load(ctx, Some("table/move.lua"), data.as_bytes()) {
-        table.set_field(ctx, "move", func)?;
+    if let Ok(move_) = Closure::load(ctx, Some("table/move.lua"), data.as_bytes()) {
+        let move_ = Callback::from_fn_with(&ctx, move_, |move_, ctx, _, mut stack| {
+            // `table.move(a1, f, e, t [, a2])`, checked in PUC's order and with its messages.
+            let f = check_integer(ctx, &stack, "move", 1)?;
+            let e = check_integer(ctx, &stack, "move", 2)?;
+            let t = check_integer(ctx, &stack, "move", 3)?;
+            let a1 = check_table(&stack, "move", 0)?;
+            let a2 = if stack.get(4).is_nil() {
+                a1
+            } else {
+                check_table(&stack, "move", 4)?
+            };
+            if e >= f {
+                if f <= 0 && e >= i64::MAX.saturating_add(f) {
+                    return Err(arg_error("move", 2, "too many elements to move"));
+                }
+                // `e - f` does not overflow past the check above.
+                let n = e - f + 1;
+                if t > i64::MAX - (n - 1) {
+                    return Err(arg_error("move", 3, "destination wrap around"));
+                }
+            }
+            // The Lua code gets the checked values.
+            stack.replace(ctx, (a1, f, e, t, a2));
+            Ok(CallbackReturn::Call {
+                function: (*move_).into(),
+                then: None,
+            })
+        });
+        table.set_field(ctx, "move", move_)?;
     }
 
     ctx.set_global("table", table)?;
@@ -509,19 +558,12 @@ fn run_op<'gc>(
     continue_sequence(ctx, poll, op)
 }
 
-fn check_table<'gc>(stack: &Stack<'gc, '_>, name: &str) -> Result<Table<'gc>, Error<'gc>> {
-    match stack.get(0) {
-        Value::Table(t) => Ok(t),
-        _ => Err(type_error(stack, name, 0, "table")),
-    }
-}
-
 fn table_insert<'gc>(
     ctx: Context<'gc>,
     mut exec: Execution<'gc, '_>,
     mut stack: Stack<'gc, '_>,
 ) -> Result<CallbackReturn<'gc>, Error<'gc>> {
-    let table = check_table(&stack, "insert")?;
+    let table = check_table(&stack, "insert", 0)?;
     let (position, value) = match stack.len() {
         2 => (None, stack.get(1)),
         3 => (Some(check_int(ctx, &stack, "insert", 1)?), stack.get(2)),
@@ -532,22 +574,19 @@ fn table_insert<'gc>(
 
     if raw {
         // Try the fast path in the array part.
-        let fast = array_insert_shift(
-            &mut table.into_inner().borrow_mut(&ctx).raw_table,
-            position,
-            value,
-            |growth| ctx.check_growth(growth),
-        );
-        exec.fuel().consume(fuel_for(fast.2, cost::TABLE_LOOKUPS));
-        match fast {
-            (RawArrayOpResult::Success(()), len, _) => {
+        let raw_table = &mut table.into_inner().borrow_mut(&ctx).raw_table;
+        let len = charged_length(raw_table, exec.fuel());
+        match array_insert_shift(raw_table, len, position, value, |growth| {
+            ctx.check_growth(growth)
+        }) {
+            RawArrayOpResult::Success(()) => {
                 let shifted =
                     len.saturating_sub(position.map_or(len, |p| p.saturating_sub(1) as usize));
                 exec.fuel()
                     .consume(count_fuel(FUEL_PER_SHIFTED_ITEM, shifted));
                 return Ok(CallbackReturn::Return);
             }
-            (RawArrayOpResult::Limit(err), _, _) => return Err(err.into()),
+            RawArrayOpResult::Limit(err) => return Err(err.into()),
             _ => {}
         }
     }
@@ -563,16 +602,16 @@ fn table_remove<'gc>(
     mut exec: Execution<'gc, '_>,
     mut stack: Stack<'gc, '_>,
 ) -> Result<CallbackReturn<'gc>, Error<'gc>> {
-    let table = check_table(&stack, "remove")?;
+    let table = check_table(&stack, "remove", 0)?;
     let position = opt_int(ctx, &stack, "remove", 1)?;
     stack.clear();
     let raw = is_raw(ctx, table);
 
     if raw {
         // Try the fast path in the array part.
-        let fast = array_remove_shift(&mut table.into_inner().borrow_mut(&ctx).raw_table, position);
-        exec.fuel().consume(fuel_for(fast.2, cost::TABLE_LOOKUPS));
-        if let (RawArrayOpResult::Success(value), len, _) = fast {
+        let raw_table = &mut table.into_inner().borrow_mut(&ctx).raw_table;
+        let len = charged_length(raw_table, exec.fuel());
+        if let RawArrayOpResult::Success(value) = array_remove_shift(raw_table, len, position) {
             if is_lua51(ctx) && !(1..=len as i64).contains(&position.unwrap_or(len as i64)) {
                 // Lua 5.1 removes nothing outside of `1..=#t`.
                 return Ok(CallbackReturn::Return);
@@ -596,7 +635,7 @@ fn table_concat<'gc>(
     exec: Execution<'gc, '_>,
     mut stack: Stack<'gc, '_>,
 ) -> Result<CallbackReturn<'gc>, Error<'gc>> {
-    let table = check_table(&stack, "concat")?;
+    let table = check_table(&stack, "concat", 0)?;
     let separator = match stack.get(1) {
         Value::Nil => None,
         _ => Some(check_string(ctx, &stack, "concat", 1)?),
@@ -614,7 +653,27 @@ fn table_concat<'gc>(
 
 const FUEL_PER_SHIFTED_ITEM: i32 = 1;
 
-const PACK_MIN_BATCH_SIZE: usize = 4096;
+// The fewest elements pack and unpack move per batch, however little fuel is left.
+const MIN_BATCH_SIZE: usize = 4096;
+
+// Starts a batch of the `remaining` elements pack or unpack has to push: as many as the remaining
+// fuel pays for (at least `MIN_BATCH_SIZE`), reserved on the stack and charged up front. Returns
+// the size of the batch.
+fn start_batch<'gc>(
+    ctx: Context<'gc>,
+    stack: &mut Stack<'gc, '_>,
+    fuel: &mut Fuel,
+    remaining: usize,
+) -> Result<usize, Error<'gc>> {
+    let remaining_fuel = fuel.remaining().max(0) as usize;
+    let available_elems = remaining_fuel.saturating_mul(cost::VALUES);
+
+    let batch_size = available_elems.max(MIN_BATCH_SIZE).min(remaining);
+    stack.try_reserve(ctx, batch_size)?;
+
+    fuel.consume((batch_size / cost::VALUES) as i32);
+    Ok(batch_size)
+}
 
 #[derive(Collect)]
 #[collect(no_drop)]
@@ -676,17 +735,7 @@ impl<'gc> Sequence<'gc> for Pack<'gc> {
         let fuel = exec.fuel();
         while *index < length {
             if index == batch_end {
-                let remaining_fuel = fuel.remaining().max(0) as usize;
-                let available_elems = remaining_fuel.saturating_mul(cost::VALUES);
-
-                let remaining_elems = length - *index;
-                let batch_size = available_elems
-                    .max(PACK_MIN_BATCH_SIZE)
-                    .min(remaining_elems);
-                stack.try_reserve(ctx, batch_size)?;
-                *batch_end = *index + batch_size;
-
-                fuel.consume((batch_size / cost::VALUES) as i32);
+                *batch_end = *index + start_batch(ctx, &mut stack, fuel, length - *index)?;
             }
 
             while *index < *batch_end {
@@ -723,8 +772,6 @@ fn try_compute_length(start: i64, end: i64) -> Option<usize> {
         .and_then(|l| l.checked_add(1))
         .and_then(|l| usize::try_from(l).ok())
 }
-
-const UNPACK_MIN_BATCH_SIZE: usize = 4096;
 
 #[derive(Collect)]
 #[collect(no_drop)]
@@ -815,17 +862,7 @@ impl<'gc> Sequence<'gc> for Unpack<'gc> {
         while *index < length {
             let batch_remaining = *batch_end - *index;
             if batch_remaining == 0 {
-                let remaining_fuel = fuel.remaining().max(0) as usize;
-                let available_elems = remaining_fuel.saturating_mul(cost::VALUES);
-
-                let remaining_elems = length - *index;
-                let batch_size = available_elems
-                    .max(UNPACK_MIN_BATCH_SIZE)
-                    .min(remaining_elems);
-                stack.try_reserve(ctx, batch_size)?;
-                *batch_end = *index + batch_size;
-
-                fuel.consume((batch_size / cost::VALUES) as i32);
+                *batch_end = *index + start_batch(ctx, &mut stack, fuel, length - *index)?;
             }
 
             while *index < *batch_end {
@@ -865,125 +902,105 @@ enum RawArrayOpResult<T> {
     Limit(LimitError),
 }
 
+// The length of the table (its border), charging the hash lookups the search took to `fuel` (see
+// `RawTable::length_with_probes`).
+fn charged_length(table: &RawTable<'_>, fuel: &mut Fuel) -> usize {
+    let (length, probes) = table.length_with_probes();
+    fuel.consume(fuel_for(probes, cost::TABLE_LOOKUPS));
+    usize::try_from(length).unwrap_or(usize::MAX)
+}
+
 // Try to efficiently remove a key from the array part of the table.  (`key` is one-indexed; if it
-// is None, the length of the array is used instead.)
+// is None, the length of the array is used instead.)  `length` is the length of the table from
+// before the operation (see `charged_length`).
 //
 // If successful, returns the removed value; otherwise, indicates whether the operation is possible
 // to implement with a fallback, or is impossible due to an out-of-range index.
-//
-// Additionally, always returns the computed length of the array from before the operation, and
-// the hash lookups its border search took (see `RawTable::length_with_probes`).
 fn array_remove_shift<'gc>(
     table: &mut RawTable<'gc>,
+    length: usize,
     key: Option<i64>,
-) -> (RawArrayOpResult<Value<'gc>>, usize, usize) {
-    fn inner<'gc>(
-        table: &mut RawTable<'gc>,
-        length: usize,
-        key: Option<i64>,
-    ) -> RawArrayOpResult<Value<'gc>> {
-        let index = if let Some(k) = key {
-            // `t[#t + 1]` is nil, `t[0]` (with `#t == 0`) is left to the slow path.
-            if i64::try_from(length).ok().map(|l| l.wrapping_add(1)) == Some(k) {
-                return RawArrayOpResult::Success(Value::Nil);
-            }
-            match usize::try_from(k) {
-                Ok(k) if k >= 1 && k <= length => k - 1,
-                _ => return RawArrayOpResult::Failed,
-            }
-        } else if length == 0 {
-            // Lua 5.4 removes and returns `t[0]` here (5.1 nothing): left to the slow path.
-            return if table.get(Value::Integer(0)).is_nil() {
-                RawArrayOpResult::Success(Value::Nil)
-            } else {
-                RawArrayOpResult::Possible
-            };
+) -> RawArrayOpResult<Value<'gc>> {
+    let index = if let Some(k) = key {
+        // `t[#t + 1]` is nil, `t[0]` (with `#t == 0`) is left to the slow path.
+        if i64::try_from(length).ok().map(|l| l.wrapping_add(1)) == Some(k) {
+            return RawArrayOpResult::Success(Value::Nil);
+        }
+        match usize::try_from(k) {
+            Ok(k) if k >= 1 && k <= length => k - 1,
+            _ => return RawArrayOpResult::Failed,
+        }
+    } else if length == 0 {
+        // Lua 5.4 removes and returns `t[0]` here (5.1 nothing): left to the slow path.
+        return if table.get(Value::Integer(0)).is_nil() {
+            RawArrayOpResult::Success(Value::Nil)
         } else {
-            length - 1
+            RawArrayOpResult::Possible
         };
+    } else {
+        length - 1
+    };
 
-        // `index < length`, so this is only `None` if the sequence does not fit in the array part.
-        let Some(shifted) = table.array_mut().get_mut(index..length) else {
-            return RawArrayOpResult::Possible;
-        };
-        let value = shifted
-            .first_mut()
-            .map(|v| mem::replace(v, Value::Nil))
-            .unwrap_or_default();
-        // DELIBERATE(cost): the move is charged after the fact (1 fuel per element, by the caller),
-        // bounded by the memory limit: at most 2 Mi values, about 1 ms (see `fuel::cost`).
-        shifted.rotate_left(1);
-        RawArrayOpResult::Success(value)
-    }
-
-    let (length, probes) = table.length_with_probes();
-    let length = usize::try_from(length).unwrap_or(usize::MAX);
-    (inner(table, length, key), length, probes)
+    // `index < length`, so this is only `None` if the sequence does not fit in the array part.
+    let Some(shifted) = table.array_mut().get_mut(index..length) else {
+        return RawArrayOpResult::Possible;
+    };
+    let value = shifted
+        .first_mut()
+        .map(|v| mem::replace(v, Value::Nil))
+        .unwrap_or_default();
+    // DELIBERATE(cost): the move is charged after the fact (1 fuel per element, by the caller),
+    // bounded by the memory limit: at most 2 Mi values, about 1 ms (see `fuel::cost`).
+    shifted.rotate_left(1);
+    RawArrayOpResult::Success(value)
 }
 
 // Try to efficiently insert a key and value into the array part of the table.  (`key` is
-// one-indexed; if it is `None`, the length of the array is used instead.)
+// one-indexed; if it is `None`, the length of the array is used instead.)  `length` is the length
+// of the table from before the operation (see `charged_length`).
 //
 // The returned [`RawArrayOpResult`] indicates whether the operation was successful, or if it
 // failed, whether the operation is possible to implement with a fallback, or is impossible due to
 // an out-of-range index.
-//
-// Additionally, always returns the computed length of the array from before the operation, and
-// the hash lookups its border search took (see `RawTable::length_with_probes`).
 fn array_insert_shift<'gc>(
     table: &mut RawTable<'gc>,
+    length: usize,
     key: Option<i64>,
     value: Value<'gc>,
     check_growth: impl FnOnce(Growth) -> Result<(), LimitError>,
-) -> (RawArrayOpResult<()>, usize, usize) {
-    fn inner<'gc>(
-        table: &mut RawTable<'gc>,
-        length: usize,
-        key: Option<i64>,
-        value: Value<'gc>,
-        check_growth: impl FnOnce(Growth) -> Result<(), LimitError>,
-    ) -> RawArrayOpResult<()> {
-        let index = if let Some(k) = key {
-            match usize::try_from(k) {
-                Ok(k) if k >= 1 && k <= length.saturating_add(1) => k - 1,
-                _ => return RawArrayOpResult::Failed,
-            }
-        } else {
-            length
-        };
-
-        let array_len = table.array().len();
-        if length > array_len {
-            return RawArrayOpResult::Possible;
+) -> RawArrayOpResult<()> {
+    let index = if let Some(k) = key {
+        match usize::try_from(k) {
+            Ok(k) if k >= 1 && k <= length.saturating_add(1) => k - 1,
+            _ => return RawArrayOpResult::Failed,
         }
+    } else {
+        length
+    };
 
-        if length == array_len {
-            // If the array is full, grow it.
-            if let Err(err) = table.try_grow_array(1, check_growth) {
-                return RawArrayOpResult::Limit(err);
-            }
-        }
-
-        // We know here that `index <= length < array.len()`, so we shift each element to the
-        // right by one. `array[length] == nil`, which gets rotated back to `array[index]`; we
-        // replace it with the value to insert.
-        let Some(shifted) = table.array_mut().get_mut(index..=length) else {
-            return RawArrayOpResult::Possible;
-        };
-        // DELIBERATE(cost): the move is charged after the fact (1 fuel per element, by the caller),
-        // bounded by the memory limit: at most 2 Mi values, about 1 ms (see `fuel::cost`).
-        shifted.rotate_right(1);
-        if let Some(first) = shifted.first_mut() {
-            *first = value;
-        }
-        RawArrayOpResult::Success(())
+    let array_len = table.array().len();
+    if length > array_len {
+        return RawArrayOpResult::Possible;
     }
 
-    let (length, probes) = table.length_with_probes();
-    let length = usize::try_from(length).unwrap_or(usize::MAX);
-    (
-        inner(table, length, key, value, check_growth),
-        length,
-        probes,
-    )
+    if length == array_len {
+        // If the array is full, grow it.
+        if let Err(err) = table.try_grow_array(1, check_growth) {
+            return RawArrayOpResult::Limit(err);
+        }
+    }
+
+    // We know here that `index <= length < array.len()`, so we shift each element to the
+    // right by one. `array[length] == nil`, which gets rotated back to `array[index]`; we
+    // replace it with the value to insert.
+    let Some(shifted) = table.array_mut().get_mut(index..=length) else {
+        return RawArrayOpResult::Possible;
+    };
+    // DELIBERATE(cost): the move is charged after the fact (1 fuel per element, by the caller),
+    // bounded by the memory limit: at most 2 Mi values, about 1 ms (see `fuel::cost`).
+    shifted.rotate_right(1);
+    if let Some(first) = shifted.first_mut() {
+        *first = value;
+    }
+    RawArrayOpResult::Success(())
 }

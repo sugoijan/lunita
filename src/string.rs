@@ -320,13 +320,14 @@ impl<'gc> InternedDynStrings<'gc> {
         let mut dyn_strings = unsafe { self.0.0.unlock_unchecked() }.borrow_mut();
 
         // The entries of freed strings are skipped here and dropped at the next collection.
-        if let Some(&(key, _)) = dyn_strings.find(hash, |&(key, _)| {
-            key.upgrade(mc)
-                .is_some_and(|st| String::from_inner(st) == s.as_ref())
-        }) {
-            if let Some(st) = key.upgrade(mc) {
-                return String::from_inner(st);
+        if let Some(st) = dyn_strings.iter_hash(hash).find_map(|&(key, h)| {
+            if h != hash {
+                return None;
             }
+            key.upgrade(mc)
+                .filter(|&st| String::from_inner(st) == s.as_ref())
+        }) {
+            return String::from_inner(st);
         }
 
         let len = dyn_strings.len();

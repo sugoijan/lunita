@@ -4,7 +4,7 @@
 use std::fmt;
 
 use crate::{
-    Compat, Context, Error, RuntimeError, Stack, String, Value,
+    Compat, Context, Error, RuntimeError, Stack, String, Table, Value,
     compiler::string_utils::lua51_str2number,
     constant::f64_to_i64,
     error::LibraryError,
@@ -70,6 +70,18 @@ pub(crate) fn type_error<'gc>(
         stack.get(i).type_name()
     };
     arg_error(name, i, format!("{expected} expected, got {found}"))
+}
+
+/// A table argument.
+pub(crate) fn check_table<'gc>(
+    stack: &Stack<'gc, '_>,
+    name: &str,
+    i: usize,
+) -> Result<'gc, Table<'gc>> {
+    match stack.get(i) {
+        Value::Table(t) => Ok(t),
+        _ => Err(type_error(stack, name, i, "table")),
+    }
 }
 
 /// A string argument, numbers being converted to strings.

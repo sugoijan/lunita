@@ -17,8 +17,8 @@ use std::pin::Pin;
 use gc_arena::{Collect, Gc, lock::RefLock};
 
 use crate::{
-    BoxSequence, Callback, CallbackReturn, Context, Error, Execution, Fuel, Function, LimitError,
-    Sequence, SequencePoll, Stack, String, Table, Value, compat,
+    BoxSequence, Callback, CallbackReturn, Context, Error, Execution, Fuel, LimitError, Sequence,
+    SequencePoll, Stack, String, Table, Value, compat,
     compiler::string_utils::c_str,
     fuel::{cost, fuel_for},
     limits::ByteBuffer,
@@ -1225,17 +1225,12 @@ fn format_one<'gc>(
         }
         b'p' if !lua51 => {
             let s = match stack.get(arg) {
+                // A string's bytes, not its object.
                 Value::String(s) => format!("{:p}", s.as_bytes().as_ptr()),
-                Value::Table(t) => format!("{:p}", Gc::as_ptr(t.into_inner())),
-                Value::Function(Function::Closure(c)) => {
-                    format!("{:p}", Gc::as_ptr(c.into_inner()))
-                }
-                Value::Function(Function::Callback(c)) => {
-                    format!("{:p}", Gc::as_ptr(c.into_inner()))
-                }
-                Value::Thread(t) => format!("{:p}", Gc::as_ptr(t.into_inner())),
-                Value::UserData(u) => format!("{:p}", Gc::as_ptr(u.into_inner())),
-                _ => "(null)".to_owned(),
+                v => match v.as_ptr() {
+                    Some(ptr) => format!("{:p}", ptr),
+                    None => "(null)".to_owned(),
+                },
             };
             format::format_bytes(out, spec, s.as_bytes());
         }

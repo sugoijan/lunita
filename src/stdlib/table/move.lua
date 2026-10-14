@@ -28,36 +28,14 @@
 ******************************************************************************/
 ]]
 
+-- The arguments are checked and converted by the callback that calls this (`load_table`).
 local src, src_base, end_idx, dst_base, dst = ...
-
-if dst == nil then
-    dst = src
-end
-
-src_base = math.tointeger(src_base)
-end_idx = math.tointeger(end_idx)
-dst_base = math.tointeger(dst_base)
-
-if src_base == nil or end_idx == nil or dst_base == nil then
-    error("arguments to move must be integers")
-end
-if type(src) ~= "table" or type(dst) ~= "table" then
-    error("arguments to move must be tables")
-end
 
 if end_idx < src_base then
     return dst
 end
 
-if src_base <= 0 and end_idx >= math.maxinteger + src_base then
-    error("too many elements to move") -- n would overflow
-end
-
 local n = end_idx - src_base + 1   -- number of elements to move
-
-if dst_base > math.maxinteger - n + 1 then
-    error("destination wrap around")
-end
 
 if dst_base > end_idx or dst_base <= src_base or dst ~= src then
     for i = 0, n - 1 do

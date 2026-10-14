@@ -70,3 +70,18 @@ do
     assert(src == 1 and dst == 2 and end_idx == 3 and src_base == nil and dst_base == nil)
     src, dst, end_idx = nil, nil, nil
 end
+
+-- The arguments are checked as PUC does, before the Lua code runs.
+do
+    local ok, err = pcall(table.move, {}, "x", 1, 1)
+    assert(not ok and err == "bad argument #2 to 'move' (number expected, got string)", err)
+    ok, err = pcall(table.move, 1, 1, 1, 1)
+    assert(not ok and err == "bad argument #1 to 'move' (table expected, got number)", err)
+    ok, err = pcall(table.move, {}, 1, 1, 1, 5)
+    assert(not ok and err == "bad argument #5 to 'move' (table expected, got number)", err)
+    ok, err = pcall(table.move, { 1 }, 0, math.maxinteger, 1)
+    assert(not ok and err == "bad argument #3 to 'move' (too many elements to move)", err)
+    ok, err = pcall(table.move, { 1 }, 1, 2, math.maxinteger)
+    assert(not ok and err == "bad argument #4 to 'move' (destination wrap around)", err)
+    assert(table.move({ 1, 2 }, 1.0, 2.0, "3")[4] == 2)
+end

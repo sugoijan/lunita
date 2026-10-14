@@ -54,6 +54,58 @@ pub(super) fn run_vm<'gc>(
 
     let get_upvalue_ref = |i: usize| current_upvalues.get(i).copied().ok_or(VMError::BadUpValue);
 
+    // Reads a register or constant operand.
+    macro_rules! rc {
+        ($rc:expr) => {
+            get_rc(&registers, &current_prototype.constants, $rc)?
+        };
+    }
+
+    // Runs a `meta_ops` function and stores its value in the `dest` register. A metamethod is
+    // instead called with its result going to `dest`, which ends the batch because the Lua frame
+    // changes. These are macros rather than functions because the metamethod arm breaks out of
+    // the instruction loop.
+    macro_rules! meta_to_register {
+        ($dest:expr, $meta_op:ident($($arg:expr),+ $(,)?)) => {
+            match meta_ops::$meta_op(ctx, $($arg),+)? {
+                MetaResult::Value(v) => registers.set($dest.0 as usize, v)?,
+                MetaResult::Call(call) => {
+                    lua_frame.call_meta_function(
+                        ctx,
+                        call.function,
+                        &call.args,
+                        MetaReturn::Register($dest),
+                    )?;
+                    break;
+                }
+            }
+        };
+    }
+
+    // Runs a `meta_ops` comparison and skips the next instruction when its truth equals
+    // `skip_if`. A metamethod is instead called with its result deciding the skip, which ends the
+    // batch.
+    macro_rules! meta_to_skip_if {
+        ($skip_if:expr, $meta_op:ident($($arg:expr),+ $(,)?)) => {
+            match meta_ops::$meta_op(ctx, $($arg),+)? {
+                MetaResult::Value(v) => {
+                    if v.to_bool() == $skip_if {
+                        *registers.pc += 1;
+                    }
+                }
+                MetaResult::Call(call) => {
+                    lua_frame.call_meta_function(
+                        ctx,
+                        call.function,
+                        &call.args,
+                        MetaReturn::SkipIf($skip_if),
+                    )?;
+                    break;
+                }
+            }
+        };
+    }
+
     loop {
         let op = current_prototype
             .opcodes
@@ -109,21 +161,7 @@ pub(super) fn run_vm<'gc>(
 
             Operation::GetTable { dest, table, key } => {
                 let table = registers.get(table.0 as usize)?;
-                let key = get_rc(&registers, &current_prototype.constants, key)?;
-                match meta_ops::index(ctx, table, key)? {
-                    MetaResult::Value(v) => {
-                        registers.set(dest.0 as usize, v)?;
-                    }
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::Register(dest),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_register!(dest, index(table, rc!(key)));
             }
 
             Operation::SetTable { table, key, value } => {
@@ -143,21 +181,7 @@ pub(super) fn run_vm<'gc>(
 
             Operation::GetUpTable { dest, table, key } => {
                 let table = registers.get_upvalue(&ctx, get_upvalue_ref(table.0 as usize)?);
-                let key = get_rc(&registers, &current_prototype.constants, key)?;
-                match meta_ops::index(ctx, table, key)? {
-                    MetaResult::Value(v) => {
-                        registers.set(dest.0 as usize, v)?;
-                    }
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::Register(dest),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_register!(dest, index(table, rc!(key)));
             }
 
             Operation::SetUpTable { table, key, value } => {
@@ -239,7 +263,7 @@ pub(super) fn run_vm<'gc>(
                     .prototypes
                     .get(proto.0 as usize)
                     .ok_or(VMError::BadPrototype)?;
-                let mut upvalues = TrackedVec::new();
+                let mut upvalues = TrackedVec::with_capacity(proto.upvalues.len());
                 for &desc in proto.upvalues.iter() {
                     match desc {
                         UpValueDescriptor::Environment => {
@@ -347,22 +371,9 @@ pub(super) fn run_vm<'gc>(
 
             Operation::Method { base, table, key } => {
                 let table = registers.get(table.0 as usize)?;
-                let key = get_rc(&registers, &current_prototype.constants, key)?;
+                let key = rc!(key);
                 registers.set(base.0 as usize + 1, table)?;
-                match meta_ops::index(ctx, table, key)? {
-                    MetaResult::Value(v) => {
-                        registers.set(base.0 as usize, v)?;
-                    }
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::Register(base),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_register!(base, index(table, key));
             }
 
             Operation::Concat {
@@ -410,20 +421,7 @@ pub(super) fn run_vm<'gc>(
             }
 
             Operation::Length { dest, source } => {
-                match meta_ops::len(ctx, registers.get(source.0 as usize)?)? {
-                    MetaResult::Value(v) => {
-                        registers.set(dest.0 as usize, v)?;
-                    }
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::Register(dest),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_register!(dest, len(registers.get(source.0 as usize)?));
             }
 
             Operation::Eq {
@@ -431,24 +429,7 @@ pub(super) fn run_vm<'gc>(
                 left,
                 right,
             } => {
-                let left = get_rc(&registers, &current_prototype.constants, left)?;
-                let right = get_rc(&registers, &current_prototype.constants, right)?;
-                match meta_ops::equal(ctx, left, right)? {
-                    MetaResult::Value(v) => {
-                        if v.to_bool() == skip_if {
-                            *registers.pc += 1;
-                        }
-                    }
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::SkipIf(skip_if),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_skip_if!(skip_if, equal(rc!(left), rc!(right)));
             }
 
             Operation::Less {
@@ -456,24 +437,7 @@ pub(super) fn run_vm<'gc>(
                 left,
                 right,
             } => {
-                let left = get_rc(&registers, &current_prototype.constants, left)?;
-                let right = get_rc(&registers, &current_prototype.constants, right)?;
-                match meta_ops::less_than(ctx, left, right)? {
-                    MetaResult::Value(v) => {
-                        if v.to_bool() == skip_if {
-                            *registers.pc += 1;
-                        }
-                    }
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::SkipIf(skip_if),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_skip_if!(skip_if, less_than(rc!(left), rc!(right)));
             }
 
             Operation::LessEq {
@@ -481,24 +445,7 @@ pub(super) fn run_vm<'gc>(
                 left,
                 right,
             } => {
-                let left = get_rc(&registers, &current_prototype.constants, left)?;
-                let right = get_rc(&registers, &current_prototype.constants, right)?;
-                match meta_ops::less_equal(ctx, left, right)? {
-                    MetaResult::Value(v) => {
-                        if v.to_bool() == skip_if {
-                            *registers.pc += 1;
-                        }
-                    }
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::SkipIf(skip_if),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_skip_if!(skip_if, less_equal(rc!(left), rc!(right)));
             }
 
             Operation::Not { dest, source } => {
@@ -507,239 +454,59 @@ pub(super) fn run_vm<'gc>(
             }
 
             Operation::Minus { dest, source } => {
-                let value = registers.get(source.0 as usize)?;
-                match meta_ops::negate(ctx, value)? {
-                    MetaResult::Value(v) => registers.set(dest.0 as usize, v)?,
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::Register(dest),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_register!(dest, negate(registers.get(source.0 as usize)?));
             }
 
             Operation::BitNot { dest, source } => {
-                let value = registers.get(source.0 as usize)?;
-                match meta_ops::bitwise_not(ctx, value)? {
-                    MetaResult::Value(v) => registers.set(dest.0 as usize, v)?,
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::Register(dest),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_register!(dest, bitwise_not(registers.get(source.0 as usize)?));
             }
 
             Operation::Add { dest, left, right } => {
-                let left = get_rc(&registers, &current_prototype.constants, left)?;
-                let right = get_rc(&registers, &current_prototype.constants, right)?;
-                match meta_ops::add(ctx, left, right)? {
-                    MetaResult::Value(v) => registers.set(dest.0 as usize, v)?,
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::Register(dest),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_register!(dest, add(rc!(left), rc!(right)));
             }
 
             Operation::Sub { dest, left, right } => {
-                let left = get_rc(&registers, &current_prototype.constants, left)?;
-                let right = get_rc(&registers, &current_prototype.constants, right)?;
-                match meta_ops::subtract(ctx, left, right)? {
-                    MetaResult::Value(v) => registers.set(dest.0 as usize, v)?,
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::Register(dest),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_register!(dest, subtract(rc!(left), rc!(right)));
             }
 
             Operation::Mul { dest, left, right } => {
-                let left = get_rc(&registers, &current_prototype.constants, left)?;
-                let right = get_rc(&registers, &current_prototype.constants, right)?;
-                match meta_ops::multiply(ctx, left, right)? {
-                    MetaResult::Value(v) => registers.set(dest.0 as usize, v)?,
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::Register(dest),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_register!(dest, multiply(rc!(left), rc!(right)));
             }
 
             Operation::Div { dest, left, right } => {
-                let left = get_rc(&registers, &current_prototype.constants, left)?;
-                let right = get_rc(&registers, &current_prototype.constants, right)?;
-                match meta_ops::float_divide(ctx, left, right)? {
-                    MetaResult::Value(v) => registers.set(dest.0 as usize, v)?,
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::Register(dest),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_register!(dest, float_divide(rc!(left), rc!(right)));
             }
 
             Operation::IDiv { dest, left, right } => {
-                let left = get_rc(&registers, &current_prototype.constants, left)?;
-                let right = get_rc(&registers, &current_prototype.constants, right)?;
-                match meta_ops::floor_divide(ctx, left, right)? {
-                    MetaResult::Value(v) => registers.set(dest.0 as usize, v)?,
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::Register(dest),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_register!(dest, floor_divide(rc!(left), rc!(right)));
             }
 
             Operation::Mod { dest, left, right } => {
-                let left = get_rc(&registers, &current_prototype.constants, left)?;
-                let right = get_rc(&registers, &current_prototype.constants, right)?;
-                match meta_ops::modulo(ctx, left, right)? {
-                    MetaResult::Value(v) => registers.set(dest.0 as usize, v)?,
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::Register(dest),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_register!(dest, modulo(rc!(left), rc!(right)));
             }
 
             Operation::Pow { dest, left, right } => {
-                let left = get_rc(&registers, &current_prototype.constants, left)?;
-                let right = get_rc(&registers, &current_prototype.constants, right)?;
-                match meta_ops::exponentiate(ctx, left, right)? {
-                    MetaResult::Value(v) => registers.set(dest.0 as usize, v)?,
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::Register(dest),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_register!(dest, exponentiate(rc!(left), rc!(right)));
             }
 
             Operation::BitAnd { dest, left, right } => {
-                let left = get_rc(&registers, &current_prototype.constants, left)?;
-                let right = get_rc(&registers, &current_prototype.constants, right)?;
-                match meta_ops::bitwise_and(ctx, left, right)? {
-                    MetaResult::Value(v) => registers.set(dest.0 as usize, v)?,
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::Register(dest),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_register!(dest, bitwise_and(rc!(left), rc!(right)));
             }
 
             Operation::BitOr { dest, left, right } => {
-                let left = get_rc(&registers, &current_prototype.constants, left)?;
-                let right = get_rc(&registers, &current_prototype.constants, right)?;
-                match meta_ops::bitwise_or(ctx, left, right)? {
-                    MetaResult::Value(v) => registers.set(dest.0 as usize, v)?,
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::Register(dest),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_register!(dest, bitwise_or(rc!(left), rc!(right)));
             }
 
             Operation::BitXor { dest, left, right } => {
-                let left = get_rc(&registers, &current_prototype.constants, left)?;
-                let right = get_rc(&registers, &current_prototype.constants, right)?;
-                match meta_ops::bitwise_xor(ctx, left, right)? {
-                    MetaResult::Value(v) => registers.set(dest.0 as usize, v)?,
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::Register(dest),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_register!(dest, bitwise_xor(rc!(left), rc!(right)));
             }
 
             Operation::ShiftLeft { dest, left, right } => {
-                let left = get_rc(&registers, &current_prototype.constants, left)?;
-                let right = get_rc(&registers, &current_prototype.constants, right)?;
-                match meta_ops::shift_left(ctx, left, right)? {
-                    MetaResult::Value(v) => registers.set(dest.0 as usize, v)?,
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::Register(dest),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_register!(dest, shift_left(rc!(left), rc!(right)));
             }
 
             Operation::ShiftRight { dest, left, right } => {
-                let left = get_rc(&registers, &current_prototype.constants, left)?;
-                let right = get_rc(&registers, &current_prototype.constants, right)?;
-                match meta_ops::shift_right(ctx, left, right)? {
-                    MetaResult::Value(v) => registers.set(dest.0 as usize, v)?,
-                    MetaResult::Call(call) => {
-                        lua_frame.call_meta_function(
-                            ctx,
-                            call.function,
-                            &call.args,
-                            MetaReturn::Register(dest),
-                        )?;
-                        break;
-                    }
-                }
+                meta_to_register!(dest, shift_right(rc!(left), rc!(right)));
             }
         }
 

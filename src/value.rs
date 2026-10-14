@@ -41,6 +41,20 @@ impl<'gc> Value<'gc> {
         }
     }
 
+    /// The address of the GC object this value is, its identity: `None` for the values that are
+    /// not one (nil, booleans and numbers). For a string it is the string object, not its bytes.
+    pub fn as_ptr(self) -> Option<*const ()> {
+        Some(match self {
+            Value::Nil | Value::Boolean(_) | Value::Integer(_) | Value::Number(_) => return None,
+            Value::String(s) => Gc::as_ptr(s.into_inner()) as *const (),
+            Value::Table(t) => Gc::as_ptr(t.into_inner()) as *const (),
+            Value::Function(Function::Closure(c)) => Gc::as_ptr(c.into_inner()) as *const (),
+            Value::Function(Function::Callback(c)) => Gc::as_ptr(c.into_inner()) as *const (),
+            Value::Thread(t) => Gc::as_ptr(t.into_inner()) as *const (),
+            Value::UserData(u) => Gc::as_ptr(u.into_inner()) as *const (),
+        })
+    }
+
     /// Returns a proxy object which can display any `Value`.
     ///
     /// [`Value::Nil`] is printed as "nil", booleans, integers, and numbers are always printed as
@@ -65,16 +79,13 @@ impl<'gc> Value<'gc> {
                     Value::Integer(i) => write!(fmt, "{}", i),
                     Value::Number(f) => write!(fmt, "{}", f),
                     Value::String(s) => write!(fmt, "{}", s.display_lossy()),
-                    Value::Table(t) => write!(fmt, "<table {:p}>", Gc::as_ptr(t.into_inner())),
-                    Value::Function(Function::Closure(c)) => {
-                        write!(fmt, "<function {:p}>", Gc::as_ptr(c.into_inner()))
-                    }
-                    Value::Function(Function::Callback(c)) => {
-                        write!(fmt, "<function {:p}>", Gc::as_ptr(c.into_inner()))
-                    }
-                    Value::Thread(t) => write!(fmt, "<thread {:p}>", Gc::as_ptr(t.into_inner())),
-                    Value::UserData(u) => {
-                        write!(fmt, "<userdata {:p}>", Gc::as_ptr(u.into_inner()))
+                    v @ (Value::Table(_)
+                    | Value::Function(_)
+                    | Value::Thread(_)
+                    | Value::UserData(_)) => {
+                        // Null only for the variants above, which this arm does not take.
+                        let ptr = v.as_ptr().unwrap_or(std::ptr::null());
+                        write!(fmt, "<{} {:p}>", v.type_name(), ptr)
                     }
                 }
             }
@@ -88,30 +99,18 @@ impl<'gc> Value<'gc> {
 
         impl<'gc> fmt::Debug for ShallowDebug<'gc> {
             fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+                // Null only for the variants printed in full below, which do not use it.
+                let ptr = self.0.as_ptr().unwrap_or(std::ptr::null());
                 match self.0 {
-                    Value::Table(t) => {
-                        write!(fmt, "Value::Table({:p})", Gc::as_ptr(t.into_inner()))
+                    Value::Table(_) => write!(fmt, "Value::Table({:p})", ptr),
+                    Value::Function(Function::Closure(_)) => {
+                        write!(fmt, "Value::Function(Function::Closure({:p}))", ptr)
                     }
-                    Value::Function(Function::Closure(c)) => {
-                        write!(
-                            fmt,
-                            "Value::Function(Function::Closure({:p}))",
-                            Gc::as_ptr(c.into_inner())
-                        )
+                    Value::Function(Function::Callback(_)) => {
+                        write!(fmt, "Value::Function(Function::Callback({:p}))", ptr)
                     }
-                    Value::Function(Function::Callback(c)) => {
-                        write!(
-                            fmt,
-                            "Value::Function(Function::Callback({:p}))",
-                            Gc::as_ptr(c.into_inner())
-                        )
-                    }
-                    Value::Thread(t) => {
-                        write!(fmt, "Value::Thread({:p})", Gc::as_ptr(t.into_inner()))
-                    }
-                    Value::UserData(u) => {
-                        write!(fmt, "Value::UserData({:p})", Gc::as_ptr(u.into_inner()))
-                    }
+                    Value::Thread(_) => write!(fmt, "Value::Thread({:p})", ptr),
+                    Value::UserData(_) => write!(fmt, "Value::UserData({:p})", ptr),
                     v => write!(fmt, "{:?}", v),
                 }
             }

@@ -33,194 +33,53 @@ pub trait Fetchable {
     fn fetch<'gc>(&self, roots: DynamicRootSet<'gc>) -> Self::Fetched<'gc>;
 }
 
-#[derive(Clone)]
-pub struct StashedString(DynamicRoot<Rootable![StringInner]>);
+/// Defines a stashed handle to a `lunita` type: a newtype over a `DynamicRoot` of the type's
+/// inner `Gc` pointer, `Debug` by pointer, and the `Stashable` and `Fetchable` conversions.
+macro_rules! stashed_type {
+    ($(#[$doc:meta])* $stashed:ident, $type:ident<'gc>, $inner:ty) => {
+        $(#[$doc])*
+        #[derive(Clone)]
+        pub struct $stashed(DynamicRoot<Rootable![$inner]>);
 
-impl fmt::Debug for StashedString {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("StashedString")
-            .field(&self.0.as_ptr())
-            .finish()
-    }
+        impl fmt::Debug for $stashed {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_tuple(stringify!($stashed))
+                    .field(&self.0.as_ptr())
+                    .finish()
+            }
+        }
+
+        impl<'gc> Stashable<'gc> for $type<'gc> {
+            type Stashed = $stashed;
+
+            fn stash(self, mc: &Mutation<'gc>, roots: DynamicRootSet<'gc>) -> Self::Stashed {
+                $stashed(roots.stash::<Rootable![$inner]>(mc, self.into_inner()))
+            }
+        }
+
+        impl Fetchable for $stashed {
+            type Fetched<'gc> = $type<'gc>;
+
+            fn fetch<'gc>(&self, roots: DynamicRootSet<'gc>) -> Self::Fetched<'gc> {
+                $type::from_inner(roots.fetch(&self.0))
+            }
+        }
+    };
 }
 
-impl<'gc> Stashable<'gc> for String<'gc> {
-    type Stashed = StashedString;
+stashed_type!(StashedString, String<'gc>, StringInner);
 
-    fn stash(self, mc: &Mutation<'gc>, roots: DynamicRootSet<'gc>) -> Self::Stashed {
-        StashedString(roots.stash::<Rootable![StringInner]>(mc, self.into_inner()))
-    }
-}
+stashed_type!(StashedTable, Table<'gc>, TableInner<'_>);
 
-impl Fetchable for StashedString {
-    type Fetched<'gc> = String<'gc>;
+stashed_type!(StashedClosure, Closure<'gc>, ClosureInner<'_>);
 
-    fn fetch<'gc>(&self, roots: DynamicRootSet<'gc>) -> Self::Fetched<'gc> {
-        String::from_inner(roots.fetch(&self.0))
-    }
-}
+stashed_type!(StashedCallback, Callback<'gc>, CallbackInner<'_>);
 
-#[derive(Clone)]
-pub struct StashedTable(DynamicRoot<Rootable![TableInner<'_>]>);
+stashed_type!(StashedThread, Thread<'gc>, ThreadInner<'_>);
 
-impl fmt::Debug for StashedTable {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("StashedTable")
-            .field(&self.0.as_ptr())
-            .finish()
-    }
-}
+stashed_type!(StashedUserData, UserData<'gc>, UserDataInner<'_>);
 
-impl<'gc> Stashable<'gc> for Table<'gc> {
-    type Stashed = StashedTable;
-
-    fn stash(self, mc: &Mutation<'gc>, roots: DynamicRootSet<'gc>) -> Self::Stashed {
-        StashedTable(roots.stash::<Rootable![TableInner<'_>]>(mc, self.into_inner()))
-    }
-}
-
-impl Fetchable for StashedTable {
-    type Fetched<'gc> = Table<'gc>;
-
-    fn fetch<'gc>(&self, roots: DynamicRootSet<'gc>) -> Self::Fetched<'gc> {
-        Table::from_inner(roots.fetch(&self.0))
-    }
-}
-
-#[derive(Clone)]
-pub struct StashedClosure(DynamicRoot<Rootable![ClosureInner<'_>]>);
-
-impl fmt::Debug for StashedClosure {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("StashedClosure")
-            .field(&self.0.as_ptr())
-            .finish()
-    }
-}
-
-impl<'gc> Stashable<'gc> for Closure<'gc> {
-    type Stashed = StashedClosure;
-
-    fn stash(self, mc: &Mutation<'gc>, roots: DynamicRootSet<'gc>) -> Self::Stashed {
-        StashedClosure(roots.stash::<Rootable![ClosureInner<'_>]>(mc, self.into_inner()))
-    }
-}
-
-impl Fetchable for StashedClosure {
-    type Fetched<'gc> = Closure<'gc>;
-
-    fn fetch<'gc>(&self, roots: DynamicRootSet<'gc>) -> Self::Fetched<'gc> {
-        Closure::from_inner(roots.fetch(&self.0))
-    }
-}
-
-#[derive(Clone)]
-pub struct StashedCallback(DynamicRoot<Rootable![CallbackInner<'_>]>);
-
-impl fmt::Debug for StashedCallback {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("StashedCallback")
-            .field(&self.0.as_ptr())
-            .finish()
-    }
-}
-
-impl<'gc> Stashable<'gc> for Callback<'gc> {
-    type Stashed = StashedCallback;
-
-    fn stash(self, mc: &Mutation<'gc>, roots: DynamicRootSet<'gc>) -> Self::Stashed {
-        StashedCallback(roots.stash::<Rootable![CallbackInner<'_>]>(mc, self.into_inner()))
-    }
-}
-
-impl Fetchable for StashedCallback {
-    type Fetched<'gc> = Callback<'gc>;
-
-    fn fetch<'gc>(&self, roots: DynamicRootSet<'gc>) -> Self::Fetched<'gc> {
-        Callback::from_inner(roots.fetch(&self.0))
-    }
-}
-
-#[derive(Clone)]
-pub struct StashedThread(DynamicRoot<Rootable![ThreadInner<'_>]>);
-
-impl fmt::Debug for StashedThread {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("StashedThread")
-            .field(&self.0.as_ptr())
-            .finish()
-    }
-}
-
-impl<'gc> Stashable<'gc> for Thread<'gc> {
-    type Stashed = StashedThread;
-
-    fn stash(self, mc: &Mutation<'gc>, roots: DynamicRootSet<'gc>) -> Self::Stashed {
-        StashedThread(roots.stash::<Rootable![ThreadInner<'_>]>(mc, self.into_inner()))
-    }
-}
-
-impl Fetchable for StashedThread {
-    type Fetched<'gc> = Thread<'gc>;
-
-    fn fetch<'gc>(&self, roots: DynamicRootSet<'gc>) -> Self::Fetched<'gc> {
-        Thread::from_inner(roots.fetch(&self.0))
-    }
-}
-
-#[derive(Clone)]
-pub struct StashedUserData(DynamicRoot<Rootable![UserDataInner<'_>]>);
-
-impl fmt::Debug for StashedUserData {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("StashedUserData")
-            .field(&self.0.as_ptr())
-            .finish()
-    }
-}
-
-impl<'gc> Stashable<'gc> for UserData<'gc> {
-    type Stashed = StashedUserData;
-
-    fn stash(self, mc: &Mutation<'gc>, roots: DynamicRootSet<'gc>) -> Self::Stashed {
-        StashedUserData(roots.stash::<Rootable![UserDataInner<'_>]>(mc, self.into_inner()))
-    }
-}
-
-impl Fetchable for StashedUserData {
-    type Fetched<'gc> = UserData<'gc>;
-
-    fn fetch<'gc>(&self, roots: DynamicRootSet<'gc>) -> Self::Fetched<'gc> {
-        UserData::from_inner(roots.fetch(&self.0))
-    }
-}
-
-#[derive(Clone)]
-pub struct StashedExecutor(DynamicRoot<Rootable![ExecutorInner<'_>]>);
-
-impl fmt::Debug for StashedExecutor {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("StashedExecutor")
-            .field(&self.0.as_ptr())
-            .finish()
-    }
-}
-
-impl<'gc> Stashable<'gc> for Executor<'gc> {
-    type Stashed = StashedExecutor;
-
-    fn stash(self, mc: &Mutation<'gc>, roots: DynamicRootSet<'gc>) -> Self::Stashed {
-        StashedExecutor(roots.stash::<Rootable![ExecutorInner<'_>]>(mc, self.into_inner()))
-    }
-}
-
-impl Fetchable for StashedExecutor {
-    type Fetched<'gc> = Executor<'gc>;
-
-    fn fetch<'gc>(&self, roots: DynamicRootSet<'gc>) -> Self::Fetched<'gc> {
-        Executor::from_inner(roots.fetch(&self.0))
-    }
-}
+stashed_type!(StashedExecutor, Executor<'gc>, ExecutorInner<'_>);
 
 #[derive(Debug, Clone)]
 pub enum StashedFunction {

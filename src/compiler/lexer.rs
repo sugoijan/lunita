@@ -1,4 +1,4 @@
-use std::{char, fmt};
+use std::{char, fmt, mem};
 
 use gc_arena::Collect;
 use thiserror::Error;
@@ -82,66 +82,12 @@ pub enum Token<S> {
 impl<S: AsRef<[u8]>> PartialEq for Token<S> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Token::Break, Token::Break) => true,
-            (Token::Do, Token::Do) => true,
-            (Token::Else, Token::Else) => true,
-            (Token::ElseIf, Token::ElseIf) => true,
-            (Token::End, Token::End) => true,
-            (Token::Function, Token::Function) => true,
-            (Token::Goto, Token::Goto) => true,
-            (Token::If, Token::If) => true,
-            (Token::In, Token::In) => true,
-            (Token::Local, Token::Local) => true,
-            (Token::Nil, Token::Nil) => true,
-            (Token::For, Token::For) => true,
-            (Token::While, Token::While) => true,
-            (Token::Repeat, Token::Repeat) => true,
-            (Token::Until, Token::Until) => true,
-            (Token::Return, Token::Return) => true,
-            (Token::Then, Token::Then) => true,
-            (Token::True, Token::True) => true,
-            (Token::False, Token::False) => true,
-            (Token::Not, Token::Not) => true,
-            (Token::And, Token::And) => true,
-            (Token::Or, Token::Or) => true,
-            (Token::Minus, Token::Minus) => true,
-            (Token::Add, Token::Add) => true,
-            (Token::Mul, Token::Mul) => true,
-            (Token::Div, Token::Div) => true,
-            (Token::IDiv, Token::IDiv) => true,
-            (Token::Pow, Token::Pow) => true,
-            (Token::Mod, Token::Mod) => true,
-            (Token::Len, Token::Len) => true,
-            (Token::BitNotXor, Token::BitNotXor) => true,
-            (Token::BitAnd, Token::BitAnd) => true,
-            (Token::BitOr, Token::BitOr) => true,
-            (Token::ShiftRight, Token::ShiftRight) => true,
-            (Token::ShiftLeft, Token::ShiftLeft) => true,
-            (Token::Concat, Token::Concat) => true,
-            (Token::Dots, Token::Dots) => true,
-            (Token::Assign, Token::Assign) => true,
-            (Token::LessThan, Token::LessThan) => true,
-            (Token::LessEqual, Token::LessEqual) => true,
-            (Token::GreaterThan, Token::GreaterThan) => true,
-            (Token::GreaterEqual, Token::GreaterEqual) => true,
-            (Token::Equal, Token::Equal) => true,
-            (Token::NotEqual, Token::NotEqual) => true,
-            (Token::Dot, Token::Dot) => true,
-            (Token::SemiColon, Token::SemiColon) => true,
-            (Token::Colon, Token::Colon) => true,
-            (Token::DoubleColon, Token::DoubleColon) => true,
-            (Token::Comma, Token::Comma) => true,
-            (Token::LeftParen, Token::LeftParen) => true,
-            (Token::RightParen, Token::RightParen) => true,
-            (Token::LeftBracket, Token::LeftBracket) => true,
-            (Token::RightBracket, Token::RightBracket) => true,
-            (Token::LeftBrace, Token::LeftBrace) => true,
-            (Token::RightBrace, Token::RightBrace) => true,
             (Token::Integer(a), Token::Integer(b)) => a == b,
             (Token::Float(a), Token::Float(b)) => a.total_cmp(b).is_eq(),
             (Token::Name(a), Token::Name(b)) => a.as_ref() == b.as_ref(),
             (Token::String(a), Token::String(b)) => a.as_ref() == b.as_ref(),
-            _ => false,
+            // The variants without data are equal when they are the same variant.
+            _ => mem::discriminant(self) == mem::discriminant(other),
         }
     }
 }
@@ -262,7 +208,6 @@ impl fmt::Display for LineNumber {
 pub struct Lexer<'a, S> {
     source: &'a [u8],
     interner: S,
-    peek_count: usize,
     string_buffer: Vec<u8>,
     max_string_len: Option<usize>,
     budget: Option<&'a CompileBudget>,
@@ -277,7 +222,6 @@ where
         Lexer {
             source,
             interner,
-            peek_count: 0,
             string_buffer: Vec::new(),
             max_string_len: None,
             budget: None,
@@ -304,7 +248,7 @@ where
 
     pub fn skip_whitespace(&mut self) -> Result<(), LexError> {
         let mut do_skip_whitespace = || {
-            while let Some(c) = self.peek(0)? {
+            while let Some(c) = self.peek(0) {
                 match c {
                     b' ' | b'\t' | VERTICAL_TAB | FORM_FEED => {
                         self.advance(1);
@@ -315,18 +259,18 @@ where
                     }
 
                     b'-' => {
-                        if self.peek(1)? != Some(b'-') {
+                        if self.peek(1) != Some(b'-') {
                             break;
                         } else {
                             self.advance(2);
 
-                            if self.at_long_bracket()? {
+                            if let Some(level) = self.long_bracket_level() {
                                 // long comment
-                                self.read_long_string(false)?;
+                                self.read_long_string(level, false)?;
                             } else {
                                 // Short comment, read until end of line. `--[==x` is one too,
                                 // only a string has an invalid long bracket.
-                                while let Some(c) = self.peek(0)? {
+                                while let Some(c) = self.peek(0) {
                                     if is_newline(c) {
                                         break;
                                     } else {
@@ -358,7 +302,7 @@ where
         self.skip_whitespace()?;
 
         let mut do_read_token = || {
-            if let Some(c) = self.peek(0)? {
+            if let Some(c) = self.peek(0) {
                 Ok(Some(match c {
                     // Whitespace and comments have been skipped.
                     b' ' | b'\t' | VERTICAL_TAB | FORM_FEED | b'\n' | b'\r' => {
@@ -366,7 +310,7 @@ where
                     }
 
                     b'-' => {
-                        if self.peek(1)? != Some(b'-') {
+                        if self.peek(1) != Some(b'-') {
                             self.advance(1);
                             Token::Minus
                         } else {
@@ -375,10 +319,12 @@ where
                     }
 
                     b'[' => {
-                        let next = self.peek(1)?;
-                        if next == Some(b'=') || next == Some(b'[') {
-                            self.read_long_string(true)?;
+                        if let Some(level) = self.long_bracket_level() {
+                            self.read_long_string(level, true)?;
                             Token::String(self.take_string()?)
+                        } else if self.peek(1) == Some(b'=') {
+                            // `[==x`: in a string, PUC-Rio Lua rejects it (a comment is short).
+                            return Err(LexError::InvalidLongStringDelimiter);
                         } else {
                             self.advance(1);
                             Token::LeftBracket
@@ -387,7 +333,7 @@ where
 
                     b'=' => {
                         self.advance(1);
-                        if self.peek(0)? == Some(b'=') {
+                        if self.peek(0) == Some(b'=') {
                             self.advance(1);
                             Token::Equal
                         } else {
@@ -397,7 +343,7 @@ where
 
                     b'<' => {
                         self.advance(1);
-                        let next = self.peek(0)?;
+                        let next = self.peek(0);
                         if next == Some(b'=') {
                             self.advance(1);
                             Token::LessEqual
@@ -411,7 +357,7 @@ where
 
                     b'>' => {
                         self.advance(1);
-                        let next = self.peek(0)?;
+                        let next = self.peek(0);
                         if next == Some(b'=') {
                             self.advance(1);
                             Token::GreaterEqual
@@ -425,7 +371,7 @@ where
 
                     b'/' => {
                         self.advance(1);
-                        if self.peek(0)? == Some(b'/') {
+                        if self.peek(0) == Some(b'/') {
                             self.advance(1);
                             Token::IDiv
                         } else {
@@ -435,7 +381,7 @@ where
 
                     b'~' => {
                         self.advance(1);
-                        if self.peek(0)? == Some(b'=') {
+                        if self.peek(0) == Some(b'=') {
                             self.advance(1);
                             Token::NotEqual
                         } else {
@@ -445,7 +391,7 @@ where
 
                     b':' => {
                         self.advance(1);
-                        if self.peek(0)? == Some(b':') {
+                        if self.peek(0) == Some(b':') {
                             self.advance(1);
                             Token::DoubleColon
                         } else {
@@ -459,15 +405,15 @@ where
                     }
 
                     b'.' => {
-                        if self.peek(1)? == Some(b'.') {
-                            if self.peek(2)? == Some(b'.') {
+                        if self.peek(1) == Some(b'.') {
+                            if self.peek(2) == Some(b'.') {
                                 self.advance(3);
                                 Token::Dots
                             } else {
                                 self.advance(2);
                                 Token::Concat
                             }
-                        } else if self.peek(1)?.map(is_digit).unwrap_or(false) {
+                        } else if self.peek(1).map(is_digit).unwrap_or(false) {
                             self.read_numeral()?
                         } else {
                             self.advance(1);
@@ -486,7 +432,7 @@ where
                             self.push_string(c)?;
                             self.advance(1);
 
-                            while let Some(c) = self.peek(0)? {
+                            while let Some(c) = self.peek(0) {
                                 if is_alpha(c) || is_digit(c) {
                                     self.push_string(c)?;
                                     self.advance(1);
@@ -524,7 +470,6 @@ where
     // input handles and temp buffers
     fn reset(&mut self) {
         self.source = &[];
-        self.peek_count = 0;
         self.string_buffer.clear();
     }
 
@@ -540,7 +485,7 @@ where
             self.push_string(b'\n')?;
         }
 
-        if let Some(next_newline) = self.peek(0)? {
+        if let Some(next_newline) = self.peek(0) {
             if is_newline(next_newline) && next_newline != newline {
                 self.advance(1);
             }
@@ -560,7 +505,7 @@ where
         self.string_buffer.clear();
 
         loop {
-            let c = if let Some(c) = self.peek(0)? {
+            let c = if let Some(c) = self.peek(0) {
                 c
             } else {
                 return Err(LexError::UnfinishedShortString(start_quote));
@@ -573,7 +518,7 @@ where
             self.advance(1);
             if c == b'\\' {
                 match self
-                    .peek(0)?
+                    .peek(0)
                     .ok_or_else(|| LexError::UnfinishedShortString(start_quote))?
                 {
                     b'a' => {
@@ -633,11 +578,11 @@ where
                     b'x' => {
                         self.advance(1);
                         let first = self
-                            .peek(0)?
+                            .peek(0)
                             .and_then(from_hex_digit)
                             .ok_or(LexError::HexDigitExpected)?;
                         let second = self
-                            .peek(1)?
+                            .peek(1)
                             .and_then(from_hex_digit)
                             .ok_or(LexError::HexDigitExpected)?;
                         self.push_string(first << 4 | second)?;
@@ -645,14 +590,14 @@ where
                     }
 
                     b'u' => {
-                        if self.peek(1)? != Some(b'{') {
+                        if self.peek(1) != Some(b'{') {
                             return Err(LexError::EscapeUnicodeStart);
                         }
                         self.advance(2);
 
                         let mut u: u32 = 0;
                         loop {
-                            if let Some(c) = self.peek(0)? {
+                            if let Some(c) = self.peek(0) {
                                 if c == b'}' {
                                     self.advance(1);
                                     break;
@@ -676,7 +621,7 @@ where
 
                     b'z' => {
                         self.advance(1);
-                        while let Some(c) = self.peek(0)? {
+                        while let Some(c) = self.peek(0) {
                             if is_newline(c) {
                                 self.read_line_end(false)?;
                             } else if is_space(c) {
@@ -691,7 +636,7 @@ where
                         if is_digit(c) {
                             let mut u: u16 = 0;
                             for _ in 0..3 {
-                                if let Some(d) = self.peek(0)?.and_then(from_digit) {
+                                if let Some(d) = self.peek(0).and_then(from_digit) {
                                     u = 10 * u + d as u16;
                                     self.advance(1);
                                 } else {
@@ -718,47 +663,36 @@ where
         Ok(())
     }
 
-    // Read a [=*[...]=*] sequence with matching numbers of '='. If `into_string` is true, writes
-    // the contained string into the string buffer.
-    // Whether a long bracket starts here: `[`, any number of `=` and another `[`.
-    fn at_long_bracket(&mut self) -> Result<bool, LexError> {
-        if self.peek(0)? != Some(b'[') {
-            return Ok(false);
+    // The level of the long bracket starting here (`[`, `level` times `=`, `[`), if one does.
+    fn long_bracket_level(&self) -> Option<usize> {
+        if self.peek(0) != Some(b'[') {
+            return None;
         }
-        let mut n = 1;
-        while self.peek(n)? == Some(b'=') {
-            n += 1;
+        let mut level = 0;
+        while self.peek(level + 1) == Some(b'=') {
+            level += 1;
         }
-        Ok(self.peek(n)? == Some(b'['))
+        (self.peek(level + 1) == Some(b'[')).then_some(level)
     }
 
-    fn read_long_string(&mut self, into_string: bool) -> Result<(), LexError> {
-        debug_assert_eq!(self.peek(0)?, Some(b'['));
-        self.advance(1);
+    // Read a [=*[...]=*] sequence with `level` '='s, which `long_bracket_level` found. If
+    // `into_string` is true, writes the contained string into the string buffer.
+    fn read_long_string(&mut self, level: usize, into_string: bool) -> Result<(), LexError> {
+        debug_assert_eq!(self.long_bracket_level(), Some(level));
+        self.advance(level + 2);
 
         if into_string {
             self.string_buffer.clear();
         }
 
-        let mut open_sep_length = 0;
-        while self.peek(0)? == Some(b'=') {
-            self.advance(1);
-            open_sep_length += 1;
-        }
-
-        if self.peek(0)? != Some(b'[') {
-            return Err(LexError::InvalidLongStringDelimiter);
-        }
-        self.advance(1);
-
-        if matches!(self.peek(0)?, Some(b'\n' | b'\r')) {
+        if matches!(self.peek(0), Some(b'\n' | b'\r')) {
             // If the long string starts imediately with a newline, we read it and do *not* put it
             // into the string buffer, matching the behavior of PUC-Rio Lua.
             self.read_line_end(false)?;
         }
 
         loop {
-            let c = if let Some(c) = self.peek(0)? {
+            let c = if let Some(c) = self.peek(0) {
                 c
             } else {
                 return Err(LexError::UnfinishedLongString);
@@ -772,12 +706,12 @@ where
                 b']' => {
                     let mut close_sep_length = 0;
                     self.advance(1);
-                    while self.peek(0)? == Some(b'=') {
+                    while self.peek(0) == Some(b'=') {
                         self.advance(1);
                         close_sep_length += 1;
                     }
 
-                    if open_sep_length == close_sep_length && self.peek(0)? == Some(b']') {
+                    if level == close_sep_length && self.peek(0) == Some(b']') {
                         self.advance(1);
                         break;
                     } else {
@@ -813,7 +747,7 @@ where
 
         self.string_buffer.clear();
 
-        let p2 = self.peek(1)?;
+        let p2 = self.peek(1);
         let is_hex = p1 == b'0' && (p2 == Some(b'x') || p2 == Some(b'X'));
         if let (true, Some(p2)) = (is_hex, p2) {
             self.push_string(p1)?;
@@ -822,7 +756,7 @@ where
         }
 
         let mut has_radix = false;
-        while let Some(c) = self.peek(0)? {
+        while let Some(c) = self.peek(0) {
             if c == b'.' && !has_radix {
                 self.push_string(b'.')?;
                 has_radix = true;
@@ -836,7 +770,7 @@ where
         }
 
         let mut has_exp = false;
-        if let Some(exp_begin) = self.peek(0)? {
+        if let Some(exp_begin) = self.peek(0) {
             if (is_hex && (exp_begin == b'p' || exp_begin == b'P'))
                 || (!is_hex && (exp_begin == b'e' || exp_begin == b'E'))
             {
@@ -844,14 +778,14 @@ where
                 has_exp = true;
                 self.advance(1);
 
-                if let Some(sign) = self.peek(0)? {
+                if let Some(sign) = self.peek(0) {
                     if sign == b'+' || sign == b'-' {
                         self.push_string(sign)?;
                         self.advance(1);
                     }
                 }
 
-                while let Some(c) = self.peek(0)? {
+                while let Some(c) = self.peek(0) {
                     if is_digit(c) {
                         self.push_string(c)?;
                         self.advance(1);
@@ -883,22 +817,16 @@ where
         ))
     }
 
-    fn peek(&mut self, n: usize) -> Result<Option<u8>, LexError> {
-        self.peek_count = (n + 1).max(self.peek_count).min(self.source.len());
-        Ok(self.source.get(n).copied())
+    fn peek(&self, n: usize) -> Option<u8> {
+        self.source.get(n).copied()
     }
 
     // Reads the next character, which must be present.
     fn expect_peek(&mut self) -> Result<u8, LexError> {
-        self.peek(0)?.ok_or(LexError::UnexpectedEnd)
+        self.peek(0).ok_or(LexError::UnexpectedEnd)
     }
 
     fn advance(&mut self, n: usize) {
-        debug_assert!(
-            n <= self.peek_count,
-            "cannot advance over un-peeked characters"
-        );
-        self.peek_count = self.peek_count.saturating_sub(n);
         self.source = self.source.get(n..).unwrap_or_default();
     }
 

@@ -340,39 +340,23 @@ impl<'gc> Executor<'gc> {
                             return_to(ctx, top_state, bottom);
                         }
                         Ok(CallbackReturn::Sequence(sequence)) => {
-                            top_state.frames.push(Frame::Sequence {
-                                bottom,
-                                sequence,
-                                pending_error: None,
-                            });
+                            top_state.push_sequence(bottom, sequence);
                         }
                         Ok(CallbackReturn::Call { function, then }) => {
                             if let Some(sequence) = then {
-                                top_state.frames.push(Frame::Sequence {
-                                    bottom,
-                                    sequence,
-                                    pending_error: None,
-                                });
+                                top_state.push_sequence(bottom, sequence);
                             }
                             top_state.push_call_or_error(ctx, bottom, function);
                         }
                         Ok(CallbackReturn::Yield { to_thread, then }) => {
                             if let Some(sequence) = then {
-                                top_state.frames.push(Frame::Sequence {
-                                    bottom,
-                                    sequence,
-                                    pending_error: None,
-                                });
+                                top_state.push_sequence(bottom, sequence);
                             }
                             do_yield(ctx, &mut state.thread_stack, top_state, to_thread, bottom);
                         }
                         Ok(CallbackReturn::Resume { thread, then }) => {
                             if let Some(sequence) = then {
-                                top_state.frames.push(Frame::Sequence {
-                                    bottom,
-                                    sequence,
-                                    pending_error: None,
-                                });
+                                top_state.push_sequence(bottom, sequence);
                             }
                             do_resume(ctx, &mut state.thread_stack, top_state, thread, bottom);
                         }
@@ -409,11 +393,7 @@ impl<'gc> Executor<'gc> {
 
                     match poll {
                         Ok(SequencePoll::Pending) => {
-                            top_state.frames.push(Frame::Sequence {
-                                bottom,
-                                sequence,
-                                pending_error: None,
-                            });
+                            top_state.push_sequence(bottom, sequence);
                         }
                         Ok(SequencePoll::Return) => {
                             return_to(ctx, top_state, bottom);
@@ -422,11 +402,7 @@ impl<'gc> Executor<'gc> {
                             function,
                             bottom: rel_bottom,
                         }) => {
-                            top_state.frames.push(Frame::Sequence {
-                                bottom,
-                                sequence,
-                                pending_error: None,
-                            });
+                            top_state.push_sequence(bottom, sequence);
                             top_state.push_call_or_error(ctx, bottom + rel_bottom, function);
                         }
                         Ok(SequencePoll::TailCall(function)) => {
@@ -436,11 +412,7 @@ impl<'gc> Executor<'gc> {
                             to_thread,
                             bottom: rel_bottom,
                         }) => {
-                            top_state.frames.push(Frame::Sequence {
-                                bottom,
-                                sequence,
-                                pending_error: None,
-                            });
+                            top_state.push_sequence(bottom, sequence);
                             do_yield(
                                 ctx,
                                 &mut state.thread_stack,
@@ -456,11 +428,7 @@ impl<'gc> Executor<'gc> {
                             thread,
                             bottom: rel_bottom,
                         }) => {
-                            top_state.frames.push(Frame::Sequence {
-                                bottom,
-                                sequence,
-                                pending_error: None,
-                            });
+                            top_state.push_sequence(bottom, sequence);
                             do_resume(
                                 ctx,
                                 &mut state.thread_stack,
@@ -551,21 +519,8 @@ impl<'gc> Executor<'gc> {
         self,
         ctx: Context<'gc>,
     ) -> Result<Result<T, Error<'gc>>, BadExecutorMode> {
-        let mode = self.mode();
-        let state = self.0.try_borrow();
-        if let (ExecutorMode::Result, Ok(Some(main_thread))) =
-            (mode, state.as_ref().map(|s| s.thread_stack.first()))
-        {
-            main_thread.take_result(ctx).map_err(|_| BadExecutorMode {
-                found: mode,
-                expected: ExecutorMode::Result,
-            })
-        } else {
-            Err(BadExecutorMode {
-                found: mode,
-                expected: ExecutorMode::Result,
-            })
-        }
+        let (main_thread, error) = self.main_thread(ExecutorMode::Result)?;
+        main_thread.take_result(ctx).map_err(|_| error)
     }
 
     pub fn resume(
@@ -573,40 +528,27 @@ impl<'gc> Executor<'gc> {
         ctx: Context<'gc>,
         args: impl IntoMultiValue<'gc>,
     ) -> Result<(), BadExecutorMode> {
-        let mode = self.mode();
-        let state = self.0.try_borrow();
-        if let (ExecutorMode::Suspended, Ok(Some(main_thread))) =
-            (mode, state.as_ref().map(|s| s.thread_stack.first()))
-        {
-            main_thread.resume(ctx, args).map_err(|_| BadExecutorMode {
-                found: mode,
-                expected: ExecutorMode::Suspended,
-            })
-        } else {
-            Err(BadExecutorMode {
-                found: mode,
-                expected: ExecutorMode::Suspended,
-            })
-        }
+        let (main_thread, error) = self.main_thread(ExecutorMode::Suspended)?;
+        main_thread.resume(ctx, args).map_err(|_| error)
     }
 
     pub fn resume_err(self, mc: &Mutation<'gc>, error: Error<'gc>) -> Result<(), BadExecutorMode> {
-        let mode = self.mode();
+        let (main_thread, bad_mode) = self.main_thread(ExecutorMode::Suspended)?;
+        main_thread.resume_err(mc, error).map_err(|_| bad_mode)
+    }
+
+    // The main thread of an executor in the expected mode, with the error to report if the
+    // thread turns out not to be in that mode.
+    fn main_thread(
+        self,
+        expected: ExecutorMode,
+    ) -> Result<(Thread<'gc>, BadExecutorMode), BadExecutorMode> {
+        let found = self.mode();
+        let error = BadExecutorMode { found, expected };
         let state = self.0.try_borrow();
-        if let (ExecutorMode::Suspended, Ok(Some(main_thread))) =
-            (mode, state.as_ref().map(|s| s.thread_stack.first()))
-        {
-            main_thread
-                .resume_err(mc, error)
-                .map_err(|_| BadExecutorMode {
-                    found: mode,
-                    expected: ExecutorMode::Suspended,
-                })
-        } else {
-            Err(BadExecutorMode {
-                found: mode,
-                expected: ExecutorMode::Suspended,
-            })
+        match state.as_ref().map(|s| s.thread_stack.first()) {
+            Ok(Some(&main_thread)) if found == expected => Ok((main_thread, error)),
+            _ => Err(error),
         }
     }
 

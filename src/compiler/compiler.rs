@@ -180,9 +180,10 @@ pub fn compile_chunk<S: StringInterner>(
 /// Compile a parsed chunk, charging the work it takes to `budget`.
 pub fn compile_chunk_with_budget<S: StringInterner>(
     chunk: &Chunk<S::String>,
-    create_string: S,
+    mut create_string: S,
     budget: &CompileBudget,
 ) -> Result<CompiledPrototype<S::String>, CompileError> {
+    let env_name = create_string.intern(b"_ENV");
     let current_function =
         CompilerFunction::start(FunctionRef::Chunk, &[], true, &create_string.hash_keys())
             .map_err(|kind| CompileError {
@@ -191,6 +192,7 @@ pub fn compile_chunk_with_budget<S: StringInterner>(
             })?;
     let mut compiler = Compiler {
         string_interner: create_string,
+        env_name,
         current_function,
         upper_functions: Vec::new(),
         budget,
@@ -209,6 +211,8 @@ pub fn compile_chunk_with_budget<S: StringInterner>(
 
 struct Compiler<'a, S: StringInterner> {
     string_interner: S,
+    // The name `_ENV`, interned once: every global reference looks it up.
+    env_name: S::String,
     current_function: CompilerFunction<S::String>,
     upper_functions: Vec<CompilerFunction<S::String>>,
     budget: &'a CompileBudget,
@@ -302,6 +306,9 @@ enum VariableDescriptor<S> {
     UpValue(UpValueIndex, LocalAttributes),
     Global(S),
 }
+
+// The table and key of an indexed assignment target, see `Compiler::prepare_target`.
+type Place<S> = (ExprDescriptor<S>, ExprDescriptor<S>);
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum ExprDestination {
@@ -417,10 +424,7 @@ impl<S: StringInterner> Compiler<'_, S> {
         if last_block.owns_upvalues && !self.current_function.blocks.is_empty() {
             self.current_function.operations.push(Operation::Jump {
                 offset: 0,
-                close_upvalues: u8::try_from(last_block.stack_bottom)
-                    .ok()
-                    .and_then(Opt254::try_some)
-                    .ok_or(CompileErrorKind::Registers)?,
+                close_upvalues: Self::close_from(last_block.stack_bottom)?,
             });
         }
 
@@ -847,24 +851,18 @@ impl<S: StringInterner> Compiler<'_, S> {
             name = field.clone();
         }
 
-        let proto = if function_statement.method.is_some() {
-            let mut parameters = vec![self.string_interner.intern(b"self")];
-            parameters.extend_from_slice(&function_statement.definition.parameters);
-
-            self.new_prototype(
-                FunctionRef::Named(name.clone(), self.current_function.current_line_number),
-                &parameters,
-                function_statement.definition.has_varargs,
-                &function_statement.definition.body,
-            )?
-        } else {
-            self.new_prototype(
-                FunctionRef::Named(name.clone(), self.current_function.current_line_number),
-                &function_statement.definition.parameters,
-                function_statement.definition.has_varargs,
-                &function_statement.definition.body,
-            )?
-        };
+        // A method has `self` as its first parameter.
+        let mut parameters = Vec::new();
+        if function_statement.method.is_some() {
+            parameters.push(self.string_interner.intern(b"self"));
+        }
+        parameters.extend_from_slice(&function_statement.definition.parameters);
+        let proto = self.new_prototype(
+            FunctionRef::Named(name.clone(), self.current_function.current_line_number),
+            &parameters,
+            function_statement.definition.has_varargs,
+            &function_statement.definition.body,
+        )?;
 
         if let Some(table) = table {
             self.set_table(
@@ -873,41 +871,8 @@ impl<S: StringInterner> Compiler<'_, S> {
                 ExprDescriptor::Closure(proto),
             )?;
         } else {
-            match self.find_variable(name.clone())? {
-                VariableDescriptor::Local(dest, attrs) => {
-                    if attrs.is_const() {
-                        return Err(CompileErrorKind::AssignToConst);
-                    }
-
-                    self.expr_discharge(
-                        ExprDescriptor::Closure(proto),
-                        ExprDestination::Register(dest),
-                    )?;
-                }
-                VariableDescriptor::UpValue(dest, attrs) => {
-                    if attrs.is_const() {
-                        return Err(CompileErrorKind::AssignToConst);
-                    }
-
-                    let source = self.expr_discharge(
-                        ExprDescriptor::Closure(proto),
-                        ExprDestination::AllocateNew,
-                    )?;
-                    self.current_function
-                        .operations
-                        .push(Operation::SetUpValue { source, dest });
-                    self.current_function.register_allocator.free(source);
-                }
-                VariableDescriptor::Global(_) => {
-                    let env = self.get_environment()?;
-                    self.set_table(
-                        env,
-                        ExprDescriptor::Constant(Constant::String(name)),
-                        ExprDescriptor::Closure(proto),
-                    )?;
-                }
-            }
-        };
+            self.assign_name(name, ExprDescriptor::Closure(proto))?;
+        }
 
         Ok(())
     }
@@ -1025,56 +990,19 @@ impl<S: StringInterner> Compiler<'_, S> {
         let target_len = assignment.targets.len();
         let val_len = assignment.values.len();
 
-        fn assign<'a, S: StringInterner>(
-            this: &'a mut Compiler<S>,
-            target: &AssignmentTarget<S::String>,
-            expr: ExprDescriptor<S::String>,
-        ) -> Result<(), CompileErrorKind> {
-            match target {
-                AssignmentTarget::Name(name) => match this.find_variable(name.clone())? {
-                    VariableDescriptor::Local(dest, attrs) => {
-                        if attrs.is_const() {
-                            return Err(CompileErrorKind::AssignToConst);
-                        }
-                        this.expr_discharge(expr, ExprDestination::Register(dest))?;
-                    }
-                    VariableDescriptor::UpValue(dest, attrs) => {
-                        if attrs.is_const() {
-                            return Err(CompileErrorKind::AssignToConst);
-                        }
-                        let (source, source_is_temp) = this.expr_any_register(expr)?;
-                        this.current_function
-                            .operations
-                            .push(Operation::SetUpValue { source, dest });
-                        if source_is_temp {
-                            this.current_function.register_allocator.free(source);
-                        }
-                    }
-                    VariableDescriptor::Global(name) => {
-                        let env = this.get_environment()?;
-                        let key = ExprDescriptor::Constant(Constant::String(name));
-                        this.set_table(env, key, expr)?;
-                    }
-                },
-
-                AssignmentTarget::Field(table, field) => {
-                    let table = this.suffixed_expression(table)?;
-                    let key = match field {
-                        FieldSuffix::Named(name) => {
-                            ExprDescriptor::Constant(Constant::String(name.clone()))
-                        }
-                        FieldSuffix::Indexed(idx) => this.expression(idx)?,
-                    };
-                    this.set_table(table, key, expr)?;
-                }
-            }
-            Ok(())
-        }
-
         if let (1, Some(target)) = (target_len, assignment.targets.first()) {
             if let Some(val) = assignment.values.first() {
                 let expr = self.expression(val)?;
-                assign(self, target, expr)?;
+                match target {
+                    AssignmentTarget::Name(name) => self.assign_name(name.clone(), expr)?,
+                    AssignmentTarget::Field(table, field) => {
+                        let mut temps = Vec::new();
+                        let (table, key) =
+                            self.prepare_target(table, field, &[], &[], &mut temps)?;
+                        self.set_table(table, key, expr)?;
+                        self.free_temps(temps);
+                    }
+                }
             }
 
             for value in assignment.values.iter().skip(1) {
@@ -1083,10 +1011,7 @@ impl<S: StringInterner> Compiler<'_, S> {
                 self.current_function.register_allocator.free(reg);
             }
         } else {
-            // As in PUC, the table and key of every indexed target are evaluated before the
-            // values, left to right, and a local or upvalue used there that the statement also
-            // assigns is copied (`check_conflict`): `t[i], i = 10, 2` sets `t[1]`, and
-            // `t[f()], x = 1, g()` calls `f` before `g`.
+            // The locals and upvalues the statement assigns, which `prepare_target` copies.
             let mut assigned_locals = Vec::new();
             let mut assigned_upvalues = Vec::new();
             for target in &assignment.targets {
@@ -1099,53 +1024,19 @@ impl<S: StringInterner> Compiler<'_, S> {
                 }
             }
 
-            // A table or key of an indexed target, ready for the assignment: left as it is when
-            // evaluating it has no effect and nothing in the statement changes it, otherwise
-            // evaluated now into a temporary register.
-            let prepare = |this: &mut Self,
-                           expr: ExprDescriptor<S::String>,
-                           temps: &mut Vec<RegisterIndex>|
-             -> Result<ExprDescriptor<S::String>, CompileErrorKind> {
-                Ok(match expr {
-                    ExprDescriptor::Constant(_) => expr,
-                    ExprDescriptor::Variable(VariableDescriptor::Local(reg, _))
-                        if !assigned_locals.contains(&reg) =>
-                    {
-                        expr
-                    }
-                    ExprDescriptor::Variable(VariableDescriptor::UpValue(idx, _))
-                        if !assigned_upvalues.contains(&idx) =>
-                    {
-                        expr
-                    }
-                    expr => {
-                        let reg = this.expr_discharge(expr, ExprDestination::AllocateNew)?;
-                        temps.push(reg);
-                        ExprDescriptor::Variable(VariableDescriptor::Local(
-                            reg,
-                            LocalAttributes::NONE,
-                        ))
-                    }
-                })
-            };
-
+            // The indexed targets are evaluated before the values, left to right.
+            let mut temps = Vec::new();
             let mut places = Vec::with_capacity(target_len);
             for target in &assignment.targets {
                 places.push(match target {
                     AssignmentTarget::Name(_) => None,
-                    AssignmentTarget::Field(table, field) => {
-                        let mut temps = Vec::new();
-                        let table = self.suffixed_expression(table)?;
-                        let table = prepare(self, table, &mut temps)?;
-                        let key = match field {
-                            FieldSuffix::Named(name) => {
-                                ExprDescriptor::Constant(Constant::String(name.clone()))
-                            }
-                            FieldSuffix::Indexed(idx) => self.expression(idx)?,
-                        };
-                        let key = prepare(self, key, &mut temps)?;
-                        Some((table, key, temps))
-                    }
+                    AssignmentTarget::Field(table, field) => Some(self.prepare_target(
+                        table,
+                        field,
+                        &assigned_locals,
+                        &assigned_upvalues,
+                        &mut temps,
+                    )?),
                 });
             }
 
@@ -1169,23 +1060,161 @@ impl<S: StringInterner> Compiler<'_, S> {
                 }
             }
 
+            // The stores happen last, in reverse order like PUC's.
             let targets = registers.into_iter().zip(&assignment.targets).zip(places);
             for ((reg, target), place) in targets.rev() {
                 let value =
                     ExprDescriptor::Variable(VariableDescriptor::Local(reg, LocalAttributes::NONE));
-                if let Some((table, key, temps)) = place {
-                    self.set_table(table, key, value)?;
-                    for temp in temps {
-                        self.current_function.register_allocator.free(temp);
+                match (target, place) {
+                    (AssignmentTarget::Name(name), _) => self.assign_name(name.clone(), value)?,
+                    (AssignmentTarget::Field(..), Some((table, key))) => {
+                        self.set_table(table, key, value)?;
                     }
-                } else {
-                    assign(self, target, value)?;
+                    (AssignmentTarget::Field(..), None) => {
+                        return Err(CompileErrorKind::Internal("indexed target not prepared"));
+                    }
                 }
                 self.current_function.register_allocator.free(reg);
             }
+            self.free_temps(temps);
         }
 
         Ok(())
+    }
+
+    // Assigns to a name: a local register, an upvalue, or a field of the environment.
+    fn assign_name(
+        &mut self,
+        name: S::String,
+        expr: ExprDescriptor<S::String>,
+    ) -> Result<(), CompileErrorKind> {
+        match self.find_variable(name)? {
+            VariableDescriptor::Local(dest, attrs) => {
+                if attrs.is_const() {
+                    return Err(CompileErrorKind::AssignToConst);
+                }
+                self.expr_discharge(expr, ExprDestination::Register(dest))?;
+            }
+            VariableDescriptor::UpValue(dest, attrs) => {
+                if attrs.is_const() {
+                    return Err(CompileErrorKind::AssignToConst);
+                }
+                let (source, source_is_temp) = self.expr_any_register(expr)?;
+                self.current_function
+                    .operations
+                    .push(Operation::SetUpValue { source, dest });
+                if source_is_temp {
+                    self.current_function.register_allocator.free(source);
+                }
+            }
+            VariableDescriptor::Global(name) => {
+                let env = self.get_environment()?;
+                let key = ExprDescriptor::Constant(Constant::String(name));
+                self.set_table(env, key, expr)?;
+            }
+        }
+        Ok(())
+    }
+
+    // The table and key of an indexed assignment target, evaluated as PUC-Rio Lua does when it
+    // parses the target, before the values: a constant and a local register are used as they
+    // are, an upvalue table with a constant string key is stored through the upvalue, and
+    // anything else is evaluated now into a temporary register. A local, or an upvalue table,
+    // that the statement also assigns is copied too (PUC's `check_conflict`), so that
+    // `t[i], i = 10, 2` sets `t[1]`.
+    // DELIBERATE(puc): the upvalue store is Lua 5.4's `SETTABUP`, used in Lua 5.1 mode too,
+    // where PUC 5.1 reads the upvalue before the values (see COMPATIBILITY.md).
+    fn prepare_target(
+        &mut self,
+        table: &SuffixedExpression<S::String>,
+        field: &FieldSuffix<S::String>,
+        assigned_locals: &[RegisterIndex],
+        assigned_upvalues: &[UpValueIndex],
+        temps: &mut Vec<RegisterIndex>,
+    ) -> Result<Place<S::String>, CompileErrorKind> {
+        // Describing the expressions emits nothing; the table is evaluated before the key.
+        let table = self.suffixed_expression(table)?;
+        let key = match field {
+            FieldSuffix::Named(name) => ExprDescriptor::Constant(Constant::String(name.clone())),
+            FieldSuffix::Indexed(idx) => self.expression(idx)?,
+        };
+        let key_is_string = matches!(key, ExprDescriptor::Constant(Constant::String(_)));
+
+        let table = match table {
+            ExprDescriptor::Variable(VariableDescriptor::Local(reg, _))
+                if !assigned_locals.contains(&reg) =>
+            {
+                table
+            }
+            ExprDescriptor::Variable(VariableDescriptor::UpValue(idx, _))
+                if key_is_string && !assigned_upvalues.contains(&idx) =>
+            {
+                table
+            }
+            table => self.temp(table, temps)?,
+        };
+        let key = match key {
+            ExprDescriptor::Constant(_) => key,
+            ExprDescriptor::Variable(VariableDescriptor::Local(reg, _))
+                if !assigned_locals.contains(&reg) =>
+            {
+                key
+            }
+            key => self.temp(key, temps)?,
+        };
+        Ok((table, key))
+    }
+
+    // Evaluates an expression now, into a temporary register recorded in `temps`.
+    fn temp(
+        &mut self,
+        expr: ExprDescriptor<S::String>,
+        temps: &mut Vec<RegisterIndex>,
+    ) -> Result<ExprDescriptor<S::String>, CompileErrorKind> {
+        let reg = self.expr_discharge(expr, ExprDestination::AllocateNew)?;
+        temps.push(reg);
+        Ok(ExprDescriptor::Variable(VariableDescriptor::Local(
+            reg,
+            LocalAttributes::NONE,
+        )))
+    }
+
+    fn free_temps(&mut self, temps: Vec<RegisterIndex>) {
+        for temp in temps {
+            self.current_function.register_allocator.free(temp);
+        }
+    }
+
+    // Frees the temporary register an operand needed, if it needed one.
+    fn free_temp(&mut self, temp: Option<RegisterIndex>) {
+        if let Some(temp) = temp {
+            self.current_function.register_allocator.free(temp);
+        }
+    }
+
+    // A stack top as the `close_upvalues` operand of a jump.
+    fn close_from(stack_top: u16) -> Result<Opt254, CompileErrorKind> {
+        u8::try_from(stack_top)
+            .ok()
+            .and_then(Opt254::try_some)
+            .ok_or(CompileErrorKind::Registers)
+    }
+
+    // Emits the call a `FunctionCall` or `MethodCall` descriptor describes.
+    fn call_expr(
+        &mut self,
+        expr: ExprDescriptor<S::String>,
+        mode: CallMode,
+    ) -> Result<RegisterIndex, CompileErrorKind> {
+        match expr {
+            ExprDescriptor::FunctionCall { func, args } => self.call_function(*func, args, mode),
+            ExprDescriptor::MethodCall {
+                table,
+                method,
+                args,
+            } => self.call_method(*table, *method, args, mode),
+            _ => Err(CompileErrorKind::Internal("not a call")),
+        }
     }
 
     fn local_function_statement(
@@ -1604,7 +1633,7 @@ impl<S: StringInterner> Compiler<'_, S> {
     // Get a reference to the variable _ENV in scope, or if that is not in scope, the implicit chunk
     // _ENV.
     fn get_environment(&mut self) -> Result<ExprDescriptor<S::String>, CompileErrorKind> {
-        let env = self.string_interner.intern(b"_ENV");
+        let env = self.env_name.clone();
         Ok(ExprDescriptor::Variable(self.find_variable(env)?))
     }
 
@@ -1652,11 +1681,7 @@ impl<S: StringInterner> Compiler<'_, S> {
                     offset: jump_offset(jmp_inst, jump_target.instruction)
                         .ok_or(CompileErrorKind::JumpOverflow)?,
                     close_upvalues: if needs_close_upvalues {
-                        (jump_target.stack_top)
-                            .try_into()
-                            .ok()
-                            .and_then(Opt254::try_some)
-                            .ok_or(CompileErrorKind::Registers)?
+                        Self::close_from(jump_target.stack_top)?
                     } else {
                         Opt254::none()
                     },
@@ -1750,11 +1775,7 @@ impl<S: StringInterner> Compiler<'_, S> {
                     *offset = jump_offset(pending_jump.instruction, target_instruction)
                         .ok_or(CompileErrorKind::JumpOverflow)?;
                     if pending_jump.close_upvalues {
-                        *close_upvalues = (current_stack_top)
-                            .try_into()
-                            .ok()
-                            .and_then(Opt254::try_some)
-                            .ok_or(CompileErrorKind::Registers)?;
+                        *close_upvalues = Self::close_from(current_stack_top)?;
                     };
                 }
                 _ => {
@@ -1818,21 +1839,11 @@ impl<S: StringInterner> Compiler<'_, S> {
         key: ExprDescriptor<S::String>,
         value: ExprDescriptor<S::String>,
     ) -> Result<(), CompileErrorKind> {
-        let (key, key_to_free) = self.expr_any_register_or_constant(key)?;
-        let (value, value_to_free) = self.expr_any_register_or_constant(value)?;
-
-        if let Some(to_free) = key_to_free {
-            self.current_function.register_allocator.free(to_free);
-        }
-        if let Some(to_free) = value_to_free {
-            self.current_function.register_allocator.free(to_free);
-        }
-
-        self.current_function
-            .operations
-            .push(Operation::SetUpTable { table, key, value });
-
-        Ok(())
+        self.set_table_op(key, value, |key, value| Operation::SetUpTable {
+            table,
+            key,
+            value,
+        })
     }
 
     fn set_rtable(
@@ -1841,20 +1852,25 @@ impl<S: StringInterner> Compiler<'_, S> {
         key: ExprDescriptor<S::String>,
         value: ExprDescriptor<S::String>,
     ) -> Result<(), CompileErrorKind> {
-        let (key, key_to_free) = self.expr_any_register_or_constant(key)?;
-        let (value, value_to_free) = self.expr_any_register_or_constant(value)?;
+        self.set_table_op(key, value, |key, value| Operation::SetTable {
+            table,
+            key,
+            value,
+        })
+    }
 
-        if let Some(to_free) = key_to_free {
-            self.current_function.register_allocator.free(to_free);
-        }
-        if let Some(to_free) = value_to_free {
-            self.current_function.register_allocator.free(to_free);
-        }
-
-        self.current_function
-            .operations
-            .push(Operation::SetTable { table, key, value });
-
+    // Evaluates the key and then the value of a table store, and emits the store.
+    fn set_table_op(
+        &mut self,
+        key: ExprDescriptor<S::String>,
+        value: ExprDescriptor<S::String>,
+        operation: impl FnOnce(RCIndex, RCIndex) -> Operation,
+    ) -> Result<(), CompileErrorKind> {
+        let (key, key_temp) = self.expr_any_register_or_constant(key)?;
+        let (value, value_temp) = self.expr_any_register_or_constant(value)?;
+        self.free_temp(key_temp);
+        self.free_temp(value_temp);
+        self.current_function.operations.push(operation(key, value));
         Ok(())
     }
 
@@ -1906,9 +1922,7 @@ impl<S: StringInterner> Compiler<'_, S> {
         if table_is_temp {
             self.current_function.register_allocator.free(table);
         }
-        if let Some(to_free) = method_to_free {
-            self.current_function.register_allocator.free(to_free);
-        }
+        self.free_temp(method_to_free);
 
         let base = self
             .current_function
@@ -2098,9 +2112,7 @@ impl<S: StringInterner> Compiler<'_, S> {
             Ok(match table {
                 ExprDescriptor::Variable(VariableDescriptor::UpValue(table, _)) => {
                     let (key_rc, key_to_free) = this.expr_any_register_or_constant(key)?;
-                    if let Some(to_free) = key_to_free {
-                        this.current_function.register_allocator.free(to_free);
-                    }
+                    this.free_temp(key_to_free);
                     let dest = new_destination(this, dest)?;
                     this.current_function
                         .operations
@@ -2117,9 +2129,7 @@ impl<S: StringInterner> Compiler<'_, S> {
                     if table_is_temp {
                         this.current_function.register_allocator.free(table);
                     }
-                    if let Some(to_free) = key_to_free {
-                        this.current_function.register_allocator.free(to_free);
-                    }
+                    this.free_temp(key_to_free);
                     let dest = new_destination(this, dest)?;
                     this.current_function.operations.push(Operation::GetTable {
                         dest,
@@ -2205,12 +2215,8 @@ impl<S: StringInterner> Compiler<'_, S> {
             ExprDescriptor::SimpleBinaryOperator { left, op, right } => {
                 let (left_rc, left_to_free) = self.expr_any_register_or_constant(*left)?;
                 let (right_rc, right_to_free) = self.expr_any_register_or_constant(*right)?;
-                if let Some(to_free) = left_to_free {
-                    self.current_function.register_allocator.free(to_free);
-                }
-                if let Some(to_free) = right_to_free {
-                    self.current_function.register_allocator.free(to_free);
-                }
+                self.free_temp(left_to_free);
+                self.free_temp(right_to_free);
 
                 let dest = new_destination(self, dest)?;
                 let simple_binop_operation = simple_binop_operation(op, dest, left_rc, right_rc);
@@ -2224,12 +2230,8 @@ impl<S: StringInterner> Compiler<'_, S> {
             ExprDescriptor::Comparison { left, op, right } => {
                 let (left_rc, left_to_free) = self.expr_any_register_or_constant(*left)?;
                 let (right_rc, right_to_free) = self.expr_any_register_or_constant(*right)?;
-                if let Some(to_free) = left_to_free {
-                    self.current_function.register_allocator.free(to_free);
-                }
-                if let Some(to_free) = right_to_free {
-                    self.current_function.register_allocator.free(to_free);
-                }
+                self.free_temp(left_to_free);
+                self.free_temp(right_to_free);
 
                 let dest = new_destination(self, dest)?;
                 let comparison_operation = comparison_binop_operation(op, left_rc, right_rc, false);
@@ -2390,43 +2392,9 @@ impl<S: StringInterner> Compiler<'_, S> {
                 dest
             }
 
-            ExprDescriptor::FunctionCall { func, args } => {
-                let source = self.call_function(
-                    *func,
-                    args,
-                    CallMode::Call {
-                        returns: VarCount::constant(1),
-                    },
-                )?;
-                match dest {
-                    ExprDestination::Register(dest) => {
-                        internal_assert!(dest != source, "move to the same register");
-                        self.current_function
-                            .operations
-                            .push(Operation::Move { dest, source });
-                        dest
-                    }
-                    ExprDestination::AllocateNew | ExprDestination::PushNew => {
-                        let pushed = self
-                            .current_function
-                            .register_allocator
-                            .push(1)
-                            .ok_or(CompileErrorKind::Registers)?;
-                        internal_assert!(pushed == source, "register not at the top");
-                        source
-                    }
-                }
-            }
-
-            ExprDescriptor::MethodCall {
-                table,
-                method,
-                args,
-            } => {
-                let source = self.call_method(
-                    *table,
-                    *method,
-                    args,
+            expr @ (ExprDescriptor::FunctionCall { .. } | ExprDescriptor::MethodCall { .. }) => {
+                let source = self.call_expr(
+                    expr,
                     CallMode::Call {
                         returns: VarCount::constant(1),
                     },
@@ -2502,30 +2470,9 @@ impl<S: StringInterner> Compiler<'_, S> {
     ) -> Result<RegisterIndex, CompileErrorKind> {
         internal_assert!(count != 0, "pushing zero values");
         Ok(match expr {
-            ExprDescriptor::FunctionCall { func, args } => {
-                let dest = self.call_function(
-                    *func,
-                    args,
-                    CallMode::Call {
-                        returns: VarCount::try_constant(count)
-                            .ok_or(CompileErrorKind::Registers)?,
-                    },
-                )?;
-                self.current_function
-                    .register_allocator
-                    .push(count)
-                    .ok_or(CompileErrorKind::Registers)?;
-                dest
-            }
-            ExprDescriptor::MethodCall {
-                table,
-                method,
-                args,
-            } => {
-                let dest = self.call_method(
-                    *table,
-                    *method,
-                    args,
+            expr @ (ExprDescriptor::FunctionCall { .. } | ExprDescriptor::MethodCall { .. }) => {
+                let dest = self.call_expr(
+                    expr,
                     CallMode::Call {
                         returns: VarCount::try_constant(count)
                             .ok_or(CompileErrorKind::Registers)?,
@@ -2595,12 +2542,8 @@ impl<S: StringInterner> Compiler<'_, S> {
         ) -> Result<(), CompileErrorKind> {
             let (left_rc, left_to_free) = this.expr_any_register_or_constant(left)?;
             let (right_rc, right_to_free) = this.expr_any_register_or_constant(right)?;
-            if let Some(to_free) = left_to_free {
-                this.current_function.register_allocator.free(to_free);
-            }
-            if let Some(to_free) = right_to_free {
-                this.current_function.register_allocator.free(to_free);
-            }
+            this.free_temp(left_to_free);
+            this.free_temp(right_to_free);
 
             let comparison_operation = comparison_binop_operation(op, left_rc, right_rc, skip_if);
             this.current_function.operations.push(comparison_operation);

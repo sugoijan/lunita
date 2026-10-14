@@ -11,3 +11,7 @@ f,g	1	2
 h,f,g,f
 comments
 after long
+upvalues
+1	nil
+1	nil
+1	nil

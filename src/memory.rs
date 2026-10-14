@@ -271,6 +271,9 @@ impl TrackedBytes {
 
     /// Changes the bytes counted.
     pub(crate) fn set(&mut self, bytes: usize) {
+        if bytes == self.bytes {
+            return;
+        }
         if bytes > self.bytes {
             with_current(|a| a.add_bytes(bytes - self.bytes));
         } else {

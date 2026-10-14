@@ -462,6 +462,20 @@ impl<'gc> ThreadState<'gc> {
         Ok(())
     }
 
+    /// Pushes the sequence frame continuing a callback at `bottom`, in the room `reserve_frame`
+    /// left: the executor pops the callback's (or the sequence's own) frame first.
+    pub(super) fn push_sequence(&mut self, bottom: usize, sequence: BoxSequence<'gc>) {
+        debug_assert!(
+            self.frames.len() < self.frames.capacity(),
+            "sequence frame pushed without room"
+        );
+        self.frames.push(Frame::Sequence {
+            bottom,
+            sequence,
+            pending_error: None,
+        });
+    }
+
     /// Pushes a new function call frame.
     ///
     /// Arguments are taken from the top of the stack starting at `bottom`, which will become the
@@ -947,8 +961,9 @@ impl<'gc, 'a> LuaFrame<'gc, 'a> {
         self.fuel
             .consume(count_fuel(Self::FUEL_PER_ITEM, arg_count));
 
+        // Truncating first keeps `remove` from shifting the rest of the frame.
+        self.state.stack.truncate(function_index + 1 + arg_count);
         self.state.stack.remove(function_index);
-        self.state.stack.truncate(function_index + arg_count);
 
         self.state.push_call(ctx, function_index, call)
     }

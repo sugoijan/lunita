@@ -130,27 +130,29 @@ fn try_array_from_fn<T, const N: usize>(
     })
 }
 
-// Sets `table[i]`, returning whether it could: an integer key is always a valid key, and a growth
-// the memory limit refuses marks the limit as exceeded, which stops the running executor. The
-// rest of a sequence is then left out (each refused entry would scan the table again).
-fn set_sequence_entry<'gc>(
+// A new table holding `values` as a sequence, `table[1..]`. An integer key is always a valid key,
+// and a growth the memory limit refuses marks the limit as exceeded, which stops the running
+// executor; the rest of the sequence is then left out (each refused entry would scan the table
+// again).
+fn sequence_into_value<'gc>(
     ctx: Context<'gc>,
-    table: Table<'gc>,
-    i: i64,
-    v: impl IntoValue<'gc>,
-) -> bool {
-    table.set(ctx, Value::Integer(i), v.into_value(ctx)).is_ok()
+    values: impl IntoIterator<Item: IntoValue<'gc>>,
+) -> Value<'gc> {
+    let table = Table::new(&ctx);
+    for (i, v) in (1..).zip(values) {
+        if table
+            .set(ctx, Value::Integer(i), v.into_value(ctx))
+            .is_err()
+        {
+            break;
+        }
+    }
+    table.into()
 }
 
 impl<'gc, T: IntoValue<'gc>> IntoValue<'gc> for Vec<T> {
     fn into_value(self, ctx: Context<'gc>) -> Value<'gc> {
-        let table = Table::new(&ctx);
-        for (i, v) in (1..).zip(self) {
-            if !set_sequence_entry(ctx, table, i, v) {
-                break;
-            }
-        }
-        table.into()
+        sequence_into_value(ctx, self)
     }
 }
 
@@ -159,13 +161,7 @@ where
     &'a T: IntoValue<'gc>,
 {
     fn into_value(self, ctx: Context<'gc>) -> Value<'gc> {
-        let table = Table::new(&ctx);
-        for (i, v) in (1..).zip(self) {
-            if !set_sequence_entry(ctx, table, i, v) {
-                break;
-            }
-        }
-        table.into()
+        sequence_into_value(ctx, self)
     }
 }
 
@@ -174,13 +170,7 @@ where
     T: IntoValue<'gc>,
 {
     fn into_value(self, ctx: Context<'gc>) -> Value<'gc> {
-        let table = Table::new(&ctx);
-        for (i, v) in (1..).zip(self) {
-            if !set_sequence_entry(ctx, table, i, v) {
-                break;
-            }
-        }
-        table.into()
+        sequence_into_value(ctx, self)
     }
 }
 
@@ -207,17 +197,13 @@ impl<'gc, T: FromValue<'gc>> FromValue<'gc> for Option<T> {
 impl<'gc, T: FromValue<'gc>> FromValue<'gc> for Vec<T> {
     fn from_value(ctx: Context<'gc>, value: Value<'gc>) -> Result<Self, TypeError> {
         if let Value::Table(table) = value {
-            // The border of a table with holes can be far past its entries (the powers of two up
-            // to `2^61` in the map part make it `2^61`), and walking up to it would take that
-            // long, outside any limit of the instance. A sequence has at least `length` entries.
-            let length = table.length();
-            if usize::try_from(length).map_or(true, |length| length > table.entries_bound()) {
+            let Some(length) = table.sequence_len() else {
                 return Err(TypeError {
                     expected: "sequence",
                     found: "table with holes",
                 });
-            }
-            (1..=length).map(|i| table.get(ctx, i)).collect()
+            };
+            (1i64..).take(length).map(|i| table.get(ctx, i)).collect()
         } else {
             Err(TypeError {
                 expected: "sequence",

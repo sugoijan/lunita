@@ -1,11 +1,11 @@
 use std::{error::Error as StdError, fmt, string::String as StdString, sync::Arc};
 
-use gc_arena::{Collect, Gc, Rootable};
+use gc_arena::{Collect, Rootable};
 use thiserror::Error;
 
 use crate::{
-    Callback, CallbackReturn, Context, FromValue, Function, IntoValue, LimitError, MetaMethod,
-    Singleton, Table, UserData, Value, thread::VMError,
+    Callback, CallbackReturn, Context, FromValue, IntoValue, LimitError, MetaMethod, Singleton,
+    Table, UserData, Value, thread::VMError,
 };
 
 #[derive(Debug, Clone, Copy, Error)]
@@ -69,21 +69,18 @@ pub enum ExternLuaError {
 
 impl<'gc> From<LuaError<'gc>> for ExternLuaError {
     fn from(error: LuaError<'gc>) -> Self {
+        // Null only for the variants converted in full, which do not use it.
+        let ptr = error.0.as_ptr().unwrap_or(std::ptr::null());
         match error.0 {
             Value::Nil => ExternLuaError::Nil,
             Value::Boolean(b) => ExternLuaError::Boolean(b),
             Value::Integer(i) => ExternLuaError::Integer(i),
             Value::Number(n) => ExternLuaError::Number(n),
             Value::String(s) => ExternLuaError::String(s.display_lossy().to_string()),
-            Value::Table(t) => ExternLuaError::Table(Gc::as_ptr(t.into_inner()) as *const ()),
-            Value::Function(Function::Callback(c)) => {
-                ExternLuaError::Function(Gc::as_ptr(c.into_inner()) as *const ())
-            }
-            Value::Function(Function::Closure(c)) => {
-                ExternLuaError::Function(Gc::as_ptr(c.into_inner()) as *const ())
-            }
-            Value::Thread(t) => ExternLuaError::Thread(Gc::as_ptr(t.into_inner()) as *const ()),
-            Value::UserData(u) => ExternLuaError::UserData(Gc::as_ptr(u.into_inner()) as *const ()),
+            Value::Table(_) => ExternLuaError::Table(ptr),
+            Value::Function(_) => ExternLuaError::Function(ptr),
+            Value::Thread(_) => ExternLuaError::Thread(ptr),
+            Value::UserData(_) => ExternLuaError::UserData(ptr),
         }
     }
 }

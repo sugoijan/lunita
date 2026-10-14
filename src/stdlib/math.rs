@@ -133,6 +133,74 @@ fn min_max_51<'gc>(
     Ok(CallbackReturn::Return)
 }
 
+// `math.min` and `math.max` of the default mode, which compare any values with metamethods, as
+// 5.4's `lua_compare` does: the candidate replaces the best so far when `best < candidate` (`max`)
+// or `candidate < best` (`min`).
+fn min_max_54<'gc>(
+    ctx: Context<'gc>,
+    stack: Stack<'gc, '_>,
+    name: &str,
+    max: bool,
+) -> Result<CallbackReturn<'gc>, Error<'gc>> {
+    check_any(&stack, name, 0)?;
+    let s = async_sequence(&ctx, |locals, mut seq| {
+        let mut best = locals.stash(&ctx, stack.get(0));
+        let args = stack.len();
+        async move {
+            for i in 1..args {
+                let (call, bottom) = seq.try_enter(|ctx, locals, _, mut stack| {
+                    let bottom = args;
+                    let (best, candidate) = (locals.fetch(&best), stack.get(i));
+                    let (lhs, rhs) = if max {
+                        (best, candidate)
+                    } else {
+                        (candidate, best)
+                    };
+                    match meta_ops::less_than(ctx, lhs, rhs)? {
+                        meta_ops::MetaResult::Value(v) => {
+                            stack.resize(bottom);
+                            stack.push_back(v);
+                            Ok((None, bottom))
+                        }
+                        meta_ops::MetaResult::Call(meta_ops::MetaCall { function, args }) => {
+                            stack.resize(bottom);
+                            stack.extend(args);
+                            Ok((Some(locals.stash(&ctx, function)), bottom))
+                        }
+                    }
+                })?;
+                if let Some(func) = call {
+                    seq.call(&func, bottom).await?;
+                }
+                seq.enter(|ctx, locals, _, stack| {
+                    if stack.get(bottom).to_bool() {
+                        best = locals.stash(&ctx, stack.get(i))
+                    }
+                });
+            }
+            seq.enter(|ctx, locals, _, mut stack| {
+                stack.replace(ctx, locals.fetch(&best));
+            });
+            Ok(SequenceReturn::Return)
+        }
+    });
+    Ok(CallbackReturn::Sequence(s))
+}
+
+// `math.min` (`max == false`) and `math.max` (`max == true`) of the running mode.
+fn min_max<'gc>(
+    ctx: Context<'gc>,
+    stack: Stack<'gc, '_>,
+    name: &str,
+    max: bool,
+) -> Result<CallbackReturn<'gc>, Error<'gc>> {
+    if is_lua51(ctx) {
+        min_max_51(ctx, stack, name, max)
+    } else {
+        min_max_54(ctx, stack, name, max)
+    }
+}
+
 pub fn load_cmp<'gc>(ctx: Context<'gc>, math: Table<'gc>) -> Result<(), LimitError> {
     math.set_field(
         ctx,
@@ -148,103 +216,12 @@ pub fn load_cmp<'gc>(ctx: Context<'gc>, math: Table<'gc>) -> Result<(), LimitErr
     math.set_field(
         ctx,
         "max",
-        Callback::from_fn(&ctx, |ctx, _, stack| {
-            if is_lua51(ctx) {
-                return min_max_51(ctx, stack, "max", true);
-            }
-            check_any(&stack, "max", 0)?;
-            let s = async_sequence(&ctx, |locals, mut seq| {
-                let mut max = locals.stash(&ctx, stack.get(0));
-                let args = stack.len();
-                async move {
-                    for i in 1..args {
-                        let (call, bottom) = seq.try_enter(|ctx, locals, _, mut stack| {
-                            let bottom = args;
-                            match meta_ops::less_than(ctx, locals.fetch(&max), stack.get(i))? {
-                                meta_ops::MetaResult::Value(v) => {
-                                    stack.resize(bottom);
-                                    stack.push_back(v);
-                                    Ok((None, bottom))
-                                }
-                                meta_ops::MetaResult::Call(meta_ops::MetaCall {
-                                    function,
-                                    args,
-                                }) => {
-                                    stack.resize(bottom);
-                                    stack.extend(args);
-                                    Ok((Some(locals.stash(&ctx, function)), bottom))
-                                }
-                            }
-                        })?;
-                        if let Some(func) = call {
-                            seq.call(&func, bottom).await?;
-                        }
-                        seq.enter(|ctx, locals, _, stack| {
-                            if stack.get(bottom).to_bool() {
-                                max = locals.stash(&ctx, stack.get(i))
-                            }
-                        });
-                    }
-                    seq.enter(|ctx, locals, _, mut stack| {
-                        stack.replace(ctx, locals.fetch(&max));
-                    });
-                    Ok(SequenceReturn::Return)
-                }
-            });
-            Ok(CallbackReturn::Sequence(s))
-        }),
+        Callback::from_fn(&ctx, |ctx, _, stack| min_max(ctx, stack, "max", true)),
     )?;
-
-    // The default mode's `min` and `max` compare any values with metamethods, as 5.4's
-    // `lua_compare` does; only 5.1's take numbers (`min_max_51`).
     math.set_field(
         ctx,
         "min",
-        Callback::from_fn(&ctx, |ctx, _, stack| {
-            if is_lua51(ctx) {
-                return min_max_51(ctx, stack, "min", false);
-            }
-            check_any(&stack, "min", 0)?;
-            let s = async_sequence(&ctx, |locals, mut seq| {
-                let mut min = locals.stash(&ctx, stack.get(0));
-                let args = stack.len();
-                async move {
-                    for i in 1..args {
-                        let (call, bottom) = seq.try_enter(|ctx, locals, _, mut stack| {
-                            let bottom = args;
-                            match meta_ops::less_than(ctx, stack.get(i), locals.fetch(&min))? {
-                                meta_ops::MetaResult::Value(v) => {
-                                    stack.resize(bottom);
-                                    stack.push_back(v);
-                                    Ok((None, bottom))
-                                }
-                                meta_ops::MetaResult::Call(meta_ops::MetaCall {
-                                    function,
-                                    args,
-                                }) => {
-                                    stack.resize(bottom);
-                                    stack.extend(args);
-                                    Ok((Some(locals.stash(&ctx, function)), bottom))
-                                }
-                            }
-                        })?;
-                        if let Some(func) = call {
-                            seq.call(&func, bottom).await?;
-                        }
-                        seq.enter(|ctx, locals, _, stack| {
-                            if stack.get(bottom).to_bool() {
-                                min = locals.stash(&ctx, stack.get(i))
-                            }
-                        });
-                    }
-                    seq.enter(|ctx, locals, _, mut stack| {
-                        stack.replace(ctx, locals.fetch(&min));
-                    });
-                    Ok(SequenceReturn::Return)
-                }
-            });
-            Ok(CallbackReturn::Sequence(s))
-        }),
+        Callback::from_fn(&ctx, |ctx, _, stack| min_max(ctx, stack, "min", false)),
     )?;
     Ok(())
 }

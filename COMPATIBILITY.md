@@ -289,6 +289,11 @@ In both modes, against PUC 5.1.5 and 5.4.9:
   equal long strings is the same (PUC's `pm.lua` and `strings.lua` expect them to differ).
 - **Table iteration** follows insertion order (deterministic on every platform); PUC's follows
   its hash layout. `#t` on tables with holes may find a different border.
+- **A field of an upvalue table with a constant string key** (`t.x = f()`, `t` an upvalue) is
+  stored through the upvalue after the value is evaluated, as Lua 5.4's `SETTABUP` does, in
+  Lua 5.1 mode too: 5.1 reads the upvalue first, so an `f` reassigning `t` makes 5.1 store into
+  the old table. Every other table or key of an assignment target is read before the values in
+  both modes, as in PUC.
 - **`tostring`** of tables, functions and threads has lunita's format (`<table 0x...>`, PUC's is
   `table: 0x...`) and ignores `__name`; `print` and `string.format` take any `__tostring` result
   (`tostring` itself checks it as each version does).
@@ -298,10 +303,9 @@ In both modes, against PUC 5.1.5 and 5.4.9:
   it for every event, 5.4 implements string arithmetic through it); `coroutine.yield` from the
   main chunk suspends the executor and its values become the chunk's result, where PUC raises
   "attempt to yield from outside a coroutine" (piccolo's design, which a host may use);
-  `table.move` and `table.sort` are Lua code reading `math`, `type` and `error` from the globals
-  at call time, `sort` checking its arguments as 5.4 does in both modes (5.1 also checks the
-  comparator when there is nothing to sort) and an error from the comparator carrying
-  `sort.lua`'s position; `load` with a reader
+  `table.move` and `table.sort` are Lua code behind a callback that checks the arguments as PUC
+  does (`sort` checks the comparator of a table with a `__len` metamethod whatever its length),
+  and an error from the comparator carries `sort.lua`'s position; `load` with a reader
   function lets the reader's errors propagate and names the chunk after its text; `next(t, 1.0)`
   with a float key is accepted (5.4 raises); NaN is formatted with its sign ("-nan", as glibc)
   where Apple's libc prints "nan"; PUC's limit of 200 nested C calls (nested `pcall`s) has no

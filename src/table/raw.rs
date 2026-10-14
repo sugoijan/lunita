@@ -5,7 +5,7 @@ use std::{
     mem,
 };
 
-use gc_arena::{Collect, Gc, Mutation};
+use gc_arena::{Collect, Mutation};
 use thiserror::Error;
 
 use crate::{
@@ -250,12 +250,18 @@ impl<'gc> RawTable<'gc> {
     // are chance (the maintainer's decision; see docs/hardening-notes.md).
     // The position in `entries` of the entry with the given key, live or dead.
     fn find(&self, key: CanonicalKey<'gc>) -> Option<usize> {
+        self.find_hashed(key).1
+    }
+
+    // The hash of a key, and the position of its entry if the map part has one.
+    fn find_hashed(&self, key: CanonicalKey<'gc>) -> (u64, Option<usize>) {
+        let hash = self.hash_builder.hash_one(key);
         let entries = &self.entries;
-        self.index
-            .find(self.hash_builder.hash_one(key), |&i| {
-                entries.get(i).is_some_and(|(k, _)| k.eq(key))
-            })
-            .copied()
+        let position = self
+            .index
+            .find(hash, |&i| entries.get(i).is_some_and(|(k, _)| k.eq(key)))
+            .copied();
+        (hash, position)
     }
 
     /// Set a table entry, returning the previous value.
@@ -294,7 +300,8 @@ impl<'gc> RawTable<'gc> {
         let table_key = CanonicalKey::new(key)?;
 
         // If there is an existing entry in the map part, replace its value.
-        if let Some(i) = self.find(table_key) {
+        let (hash, found) = self.find_hashed(table_key);
+        if let Some(i) = found {
             let Some((k, v)) = self.entries.get_mut(i) else {
                 return Ok(Value::Nil);
             };
@@ -355,11 +362,7 @@ impl<'gc> RawTable<'gc> {
         self.entries.push((Key::Live(table_key), value));
         let (entries, hash_builder) = (&self.entries, &self.hash_builder);
         self.index.update(|index| {
-            index.insert_unique(
-                hash_builder.hash_one(table_key),
-                i,
-                entry_hasher(entries, hash_builder),
-            );
+            index.insert_unique(hash, i, entry_hasher(entries, hash_builder));
         });
         Ok(Value::Nil)
     }
@@ -492,10 +495,8 @@ impl<'gc> RawTable<'gc> {
                     // table, therefore it is Nil, so since the table contains i64::MAX, i64::MAX is
                     // a border.
                     break i64::MAX;
-                } else if let Some(double_max) = max.checked_mul(2) {
-                    max = double_max;
                 } else {
-                    max = i64::MAX;
+                    max = max.saturating_mul(2);
                 }
             }
         };
@@ -880,27 +881,11 @@ enum Key<'gc> {
 }
 
 impl<'gc> Key<'gc> {
+    // Only a GC object (`Value::as_ptr`) has a dead form.
     fn kill(self) -> Option<Key<'gc>> {
-        if let Key::Live(v) = self {
-            match v {
-                CanonicalKey::Boolean(_) | CanonicalKey::Integer(_) | CanonicalKey::Number(_) => {
-                    None
-                }
-                CanonicalKey::String(s) => Some(Key::Dead(Gc::as_ptr(s.into_inner()) as *const ())),
-                CanonicalKey::Table(t) => Some(Key::Dead(Gc::as_ptr(t.into_inner()) as *const ())),
-                CanonicalKey::Closure(c) => {
-                    Some(Key::Dead(Gc::as_ptr(c.into_inner()) as *const ()))
-                }
-                CanonicalKey::Callback(c) => {
-                    Some(Key::Dead(Gc::as_ptr(c.into_inner()) as *const ()))
-                }
-                CanonicalKey::Thread(t) => Some(Key::Dead(Gc::as_ptr(t.into_inner()) as *const ())),
-                CanonicalKey::UserData(u) => {
-                    Some(Key::Dead(Gc::as_ptr(u.into_inner()) as *const ()))
-                }
-            }
-        } else {
-            Some(self)
+        match self {
+            Key::Live(v) => v.to_value().as_ptr().map(Key::Dead),
+            Key::Dead(_) => Some(self),
         }
     }
 
@@ -914,15 +899,7 @@ impl<'gc> Key<'gc> {
     fn eq(self, key: CanonicalKey<'gc>) -> bool {
         match (self, key) {
             (Key::Live(a), b) => a == b,
-            (Key::Dead(a), b) => match b {
-                CanonicalKey::String(s) => a == Gc::as_ptr(s.into_inner()) as *const (),
-                CanonicalKey::Table(t) => a == Gc::as_ptr(t.into_inner()) as *const (),
-                CanonicalKey::Closure(c) => a == Gc::as_ptr(c.into_inner()) as *const (),
-                CanonicalKey::Callback(c) => a == Gc::as_ptr(c.into_inner()) as *const (),
-                CanonicalKey::Thread(t) => a == Gc::as_ptr(t.into_inner()) as *const (),
-                CanonicalKey::UserData(u) => a == Gc::as_ptr(u.into_inner()) as *const (),
-                _ => false,
-            },
+            (Key::Dead(a), b) => b.to_value().as_ptr() == Some(a),
         }
     }
 }

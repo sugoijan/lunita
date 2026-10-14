@@ -52,3 +52,32 @@ print('comments')
 --[ short
 --[[ long
 ]] print('after long')
+
+print('upvalues')
+local k = 'a'
+local function fk() k = 'b' return 1 end
+local tk = {}
+local function key_upvalue()
+    local y
+    tk[k], y = fk(), 2
+end
+key_upvalue()
+print(tk.a, tk.b)
+local u = {}
+local old_u = u
+local function hu() u = {} return 1 end
+local function table_upvalue()
+    local y
+    u[1], y = hu(), 2
+end
+table_upvalue()
+print(old_u[1], u[1])
+local w = {}
+local old_w = w
+local function hw() w = {} return 1 end
+local iw = 1
+local function single_target()
+    w[iw] = hw()
+end
+single_target()
+print(old_w[1], w[1])

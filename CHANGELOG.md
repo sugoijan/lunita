@@ -10,9 +10,15 @@
   `check_conflict` arranges.
 * `--[=` not followed by `[` is a short comment, as in PUC, instead of an "invalid long string
   delimiter" error.
-* `table.move` no longer writes its five variables to the globals of the instance.
-* `table.sort` checks that its first argument is a table and, when there is something to sort,
-  that the comparator is a function, with PUC's "bad argument" messages.
+* An upvalue used as the table or key of an assignment target is read before the values, as PUC
+  does (`t[k], y = f(), 2` with `f` changing the upvalue `k` stores under the old key); a table
+  upvalue with a constant string key is stored through the upvalue after the values (5.4's
+  `SETTABUP`), in both modes, see COMPATIBILITY.md.
+* `table.sort` and `table.move` check their arguments in a callback before their Lua code
+  runs, with PUC's "bad argument" messages, the caller's position, and the mode's rules (5.1
+  always checks the comparator); `move` converts its integers as the other library functions
+  do. `move` no longer writes its five variables to the globals of the instance, and neither
+  function reads the globals any more.
 * Converting a table to a `Vec` (`FromValue`) refuses a table whose border is past its entries
   (`Table::entries_bound`) instead of walking up to it: the powers of two up to `2^61` make the
   border of a table with holes `2^61`, and a host converting such a table looped for that long,
@@ -22,6 +28,21 @@
   counted afterwards.
 * `Lua::set_limits` documents that an instance over a lowered memory limit stops its script at
   the next step.
+* `LocalAttributes` prints `NONE` when it has no attribute.
+
+### Added
+
+* `Table::sequence_len`, the length of a table that is a sequence, and `Table::entries_bound`,
+  the number of entries a table can hold, which bounds it (the `Vec` conversion uses them).
+* `Value::as_ptr`, the address identifying a table, function, thread or userdata.
+
+### Changed
+
+* The async sequence support waits with `Waker::noop`, dropping the fork's only hand-rolled
+  waker and the `unsafe` block it took.
+* The hot paths do less bookkeeping: a tracked vector whose capacity is unchanged skips the
+  accounting, a new table key is hashed once, a table read consults the metatable only for a
+  key the table does not have, and a call shifts only the arguments it keeps.
 
 ## lunita 0.1.0 (2026-10-13)
 

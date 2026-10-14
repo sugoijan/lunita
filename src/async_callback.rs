@@ -6,7 +6,7 @@ use std::{
     pin::Pin,
     ptr,
     rc::Rc,
-    task::{self, Poll, RawWaker, RawWakerVTable, Waker},
+    task::{self, Poll, Waker},
 };
 
 use gc_arena::{Collect, DynamicRootSet, Mutation};
@@ -378,7 +378,7 @@ where
                 // SAFETY: pinning is structural for field `fut`. We do not move it, provide any access
                 // to it at all, and our drop impl is trivial.
                 unsafe {
-                    Pin::new_unchecked(fut).poll(&mut task::Context::from_waker(&noop_waker()))
+                    Pin::new_unchecked(fut).poll(&mut task::Context::from_waker(Waker::noop()))
                 }
             },
         );
@@ -530,17 +530,6 @@ impl SharedSlot {
             f(&mut *shared)
         }
     }
-}
-
-fn noop_waker() -> Waker {
-    const NOOP_RAW_WAKER: RawWaker = {
-        const VTABLE: RawWakerVTable =
-            RawWakerVTable::new(|_| NOOP_RAW_WAKER, |_| {}, |_| {}, |_| {});
-        RawWaker::new(ptr::null(), &VTABLE)
-    };
-
-    // SAFETY: NOOP_RAW_WAKER VTable is trivial.
-    unsafe { Waker::from_raw(NOOP_RAW_WAKER) }
 }
 
 async fn wait_once() {

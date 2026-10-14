@@ -3,8 +3,8 @@ use std::pin::Pin;
 use gc_arena::{Collect, Gc};
 
 use super::args::{
-    arg_error, check_any, check_int, check_integer, check_string, error, error_bytes, is_lua51,
-    opt_integer, type_error,
+    arg_error, check_any, check_int, check_integer, check_string, check_table, error, error_bytes,
+    is_lua51, opt_integer, type_error,
 };
 use crate::compiler::string_utils::c_str;
 use crate::{
@@ -660,9 +660,7 @@ fn check_iterated<'gc>(
     name: &str,
 ) -> Result<(), Error<'gc>> {
     if is_lua51(ctx) {
-        if !matches!(stack.get(0), Value::Table(_)) {
-            return Err(type_error(stack, name, 0, "table"));
-        }
+        check_table(stack, name, 0)?;
     } else {
         check_any(stack, name, 0)?;
     }

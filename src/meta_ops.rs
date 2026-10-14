@@ -246,10 +246,14 @@ pub fn index<'gc>(
     for hops in 0..max_hops {
         let idx = match target {
             Value::Table(table) => {
+                // The metatable is only read for a key the table does not have.
                 let v = table.get_value(ctx, key);
-                let idx = match table.metatable() {
-                    Some(mt) if v.is_nil() => mt.get_value(ctx, MetaMethod::Index),
-                    _ => Value::Nil,
+                let idx = if v.is_nil() {
+                    table
+                        .metatable()
+                        .map_or(Value::Nil, |mt| mt.get_value(ctx, MetaMethod::Index))
+                } else {
+                    Value::Nil
                 };
                 if idx.is_nil() {
                     charge_chain(ctx, hops);
@@ -524,52 +528,18 @@ fn meta_metaop<'gc>(
     const_op: impl Fn(Context<'gc>, Value<'gc>, Value<'gc>) -> Option<Value<'gc>>,
 ) -> Result<MetaResult<'gc, 2>, MetaOperatorError> {
     Ok(match (lhs, rhs) {
-        (Value::Table(_) | Value::UserData(_), Value::Table(_) | Value::UserData(_)) => {
-            if let Some(m) = get_metamethod(ctx, lhs, method) {
-                MetaResult::Call(MetaCall {
-                    function: call(ctx, m).map_err(|e| MetaOperatorError::Call(method, e))?,
-                    args: [lhs, rhs],
-                })
-            } else if let Some(m) = get_metamethod(ctx, rhs, method) {
-                MetaResult::Call(MetaCall {
-                    function: call(ctx, m).map_err(|e| MetaOperatorError::Call(method, e))?,
-                    args: [lhs, rhs],
-                })
-            } else {
-                return Err(MetaOperatorError::Binary(
-                    method,
-                    lhs.type_name(),
-                    rhs.type_name(),
-                ));
-            }
-        }
-        (Value::Table(_) | Value::UserData(_), _) => {
-            if let Some(m) = get_metamethod(ctx, lhs, method) {
-                MetaResult::Call(MetaCall {
-                    function: call(ctx, m).map_err(|e| MetaOperatorError::Call(method, e))?,
-                    args: [lhs, rhs],
-                })
-            } else {
-                return Err(MetaOperatorError::Binary(
-                    method,
-                    lhs.type_name(),
-                    rhs.type_name(),
-                ));
-            }
-        }
-        (_, Value::Table(_) | Value::UserData(_)) => {
-            if let Some(m) = get_metamethod(ctx, rhs, method) {
-                MetaResult::Call(MetaCall {
-                    function: call(ctx, m).map_err(|e| MetaOperatorError::Call(method, e))?,
-                    args: [lhs, rhs],
-                })
-            } else {
-                return Err(MetaOperatorError::Binary(
-                    method,
-                    lhs.type_name(),
-                    rhs.type_name(),
-                ));
-            }
+        // The left operand's metamethod first, as PUC does; `get_metamethod` is `None` for every
+        // other type of value.
+        (Value::Table(_) | Value::UserData(_), _) | (_, Value::Table(_) | Value::UserData(_)) => {
+            let metamethod = get_metamethod(ctx, lhs, method)
+                .or_else(|| get_metamethod(ctx, rhs, method))
+                .ok_or_else(|| {
+                    MetaOperatorError::Binary(method, lhs.type_name(), rhs.type_name())
+                })?;
+            MetaResult::Call(MetaCall {
+                function: call(ctx, metamethod).map_err(|e| MetaOperatorError::Call(method, e))?,
+                args: [lhs, rhs],
+            })
         }
         (a, b) => {
             // Coercing or comparing strings takes time proportional to their length.

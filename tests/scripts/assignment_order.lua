@@ -76,3 +76,47 @@ do
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
     assert(big.a == 1 and big.t == 20)
 end
+
+-- An upvalue used as a table or key is read before the values too (PUC reads it into a
+-- register when it parses the target), unless it is a table with a constant string key, which
+-- Lua 5.4 stores through the upvalue (`SETTABUP`) after the values.
+do
+    local k = "a"
+    local function f() k = "b" return 1 end
+    local t = {}
+    local function key_upvalue()
+        local y
+        t[k], y = f(), 2
+    end
+    key_upvalue()
+    assert(t.a == 1 and t.b == nil)
+
+    local u = {}
+    local old = u
+    local function h() u = {} return 1 end
+    local function table_upvalue()
+        local y
+        u[1], y = h(), 2
+    end
+    table_upvalue()
+    assert(old[1] == 1 and u[1] == nil)
+
+    local w = {}
+    local old_w = w
+    local function hw() w = {} return 1 end
+    local i = 1
+    local function single_target()
+        w[i] = hw()
+    end
+    single_target()
+    assert(old_w[1] == 1 and w[1] == nil)
+
+    local s = {}
+    local new_s
+    local function hs() new_s = {} s = new_s return 1 end
+    local function string_key()
+        s.x = hs()
+    end
+    string_key()
+    assert(new_s.x == 1)
+end

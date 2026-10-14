@@ -50,20 +50,9 @@ local function sort(arr, lo, hi, t, cmp)
     end
 end
 
+-- The arguments are checked by the callback that calls this (`load_table`).
 local arr, cmp = ...
--- The checks of PUC's `sort`, without a position as its C function has none. Lua 5.4 only
--- checks the comparator when there is something to sort, 5.1 always does.
-if type(arr) ~= "table" then
-    error("bad argument #1 to 'sort' (table expected, got " .. type(arr) .. ")", 0)
-end
 local len = #arr
-if len < 0 then
-    len = 0
-end
-if len > 1 and cmp ~= nil and type(cmp) ~= "function" then
-    error("bad argument #2 to 'sort' (function expected, got " .. type(cmp) .. ")", 0)
-end
 
 local temp = {}
 sort(arr, 1, len, temp, cmp)
-return
