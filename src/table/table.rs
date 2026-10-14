@@ -227,6 +227,14 @@ impl<'gc> Table<'gc> {
         self.0.borrow().raw_table.length()
     }
 
+    /// An upper bound on the number of non-nil entries, see [`RawTable::entries_bound`]. A
+    /// sequence (a table whose only border is its length) has at least as many entries as its
+    /// length, so a length past this bound shows a table with holes, and a host walking `1..=len`
+    /// of one may loop for as long as the border is large.
+    pub fn entries_bound(self) -> usize {
+        self.0.borrow().raw_table.entries_bound()
+    }
+
     /// Returns a border for this table like [`Table::length`], charging fuel for the search to
     /// the running `Executor` (see [`Context::charge_fuel`]).
     pub fn length_charged(self, ctx: Context<'gc>) -> i64 {

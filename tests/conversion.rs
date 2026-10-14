@@ -87,3 +87,33 @@ fn test_result_conversion() {
         ));
     });
 }
+
+// A border of a table with holes can be far past its entries; `Vec` refuses it rather than walk
+// up to it.
+#[test]
+fn test_sequence_with_holes() {
+    let mut lua = Lua::core();
+    lua.enter(|ctx| {
+        // The map part gets spare room first (its capacity doubles past 1024), so that no
+        // rehash moves the small powers of two into the array part, which would end the border
+        // search at their end.
+        let table = Table::new(&ctx);
+        for i in 0..1100 {
+            table
+                .set(ctx, ctx.intern(format!("k{i}").as_bytes()), 1)
+                .unwrap();
+        }
+        for k in 0..=61 {
+            table.set(ctx, 1i64 << k, 1).unwrap();
+        }
+        assert!(table.length() >= 1 << 61, "length {}", table.length());
+        let err = Vec::<Value>::from_value(ctx, table.into()).unwrap_err();
+        assert_eq!(err.expected, "sequence");
+
+        let table = Table::new(&ctx);
+        table.set(ctx, 1, 1).unwrap();
+        table.set(ctx, 3, 3).unwrap();
+        let values = Vec::<Value>::from_value(ctx, table.into()).unwrap();
+        assert!(matches!(values.as_slice(), [Value::Integer(1)]));
+    });
+}

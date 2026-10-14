@@ -437,8 +437,9 @@ impl<'gc> ThreadState<'gc> {
 
     /// Makes room for one more frame, checking the memory limit first.
     ///
-    /// This always leaves room for one frame more, so that an error frame can be pushed after a
-    /// frame is refused without growing the frame stack.
+    /// This always leaves room for two frames more: an error frame can be pushed after a frame is
+    /// refused, and a callback that yields with a continuation replaces its frame with three
+    /// (sequence, yielded, result), all without growing the frame stack.
     fn reserve_frame(&mut self, ctx: Context<'gc>) -> Result<(), VMError> {
         let max_frames = match ctx.compat() {
             Compat::Lua51 => MAX_FRAMES_51,
@@ -448,7 +449,7 @@ impl<'gc> ThreadState<'gc> {
             return Err(VMError::StackOverflow);
         }
         let capacity = self.frames.capacity();
-        let required = self.frames.len().saturating_add(2);
+        let required = self.frames.len().saturating_add(3);
         if required > capacity {
             let new_capacity = required.max(capacity.saturating_mul(2)).max(4);
             ctx.check_growth(Growth {

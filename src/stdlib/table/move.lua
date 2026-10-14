@@ -28,7 +28,7 @@
 ******************************************************************************/
 ]]
 
-src, src_base, end_idx, dst_base, dst = ...
+local src, src_base, end_idx, dst_base, dst = ...
 
 if dst == nil then
     dst = src

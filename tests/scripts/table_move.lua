@@ -62,3 +62,11 @@ do
     table.move(a, 1, 3, -1, b)
     assert(arrays_eq(b, { [-1] = 1, [0] = 2, 3 }))
 end
+
+-- `table.move` is Lua code; its variables are not the caller's globals.
+do
+    src, dst, end_idx = 1, 2, 3
+    table.move({ 1 }, 1, 1, 1)
+    assert(src == 1 and dst == 2 and end_idx == 3 and src_base == nil and dst_base == nil)
+    src, dst, end_idx = nil, nil, nil
+end

@@ -1,3 +1,28 @@
+## lunita 0.1.1 (unreleased)
+
+### Fixed
+
+* A local statement brings its names into scope after all of its values, as PUC-Rio Lua does:
+  `local a, b = b, a` swaps, where a value after the first found the new local (`2 2`).
+* In a multiple assignment the table and key of each indexed target are evaluated before the
+  values, left to right, and keep their value when the statement assigns the local or upvalue
+  they name (`t[i], i = 10, 2` sets `t[1]`; `t[f()], x = 1, g()` calls `f` first), as PUC's
+  `check_conflict` arranges.
+* `--[=` not followed by `[` is a short comment, as in PUC, instead of an "invalid long string
+  delimiter" error.
+* `table.move` no longer writes its five variables to the globals of the instance.
+* `table.sort` checks that its first argument is a table and, when there is something to sort,
+  that the comparator is a function, with PUC's "bad argument" messages.
+* Converting a table to a `Vec` (`FromValue`) refuses a table whose border is past its entries
+  (`Table::entries_bound`) instead of walking up to it: the powers of two up to `2^61` make the
+  border of a table with holes `2^61`, and a host converting such a table looped for that long,
+  outside any limit of the instance.
+* The frame stack reserves room for the three frames a callback yielding with a continuation
+  pushes in place of its own, so that the growth is checked against the memory limit instead of
+  counted afterwards.
+* `Lua::set_limits` documents that an instance over a lowered memory limit stops its script at
+  the next step.
+
 ## lunita 0.1.0 (2026-10-13)
 
 `lunita` is a fork of piccolo 0.3.3, published under its own name. Hardening for running

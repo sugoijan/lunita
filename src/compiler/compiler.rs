@@ -947,6 +947,9 @@ impl<S: StringInterner> Compiler<'_, S> {
                     .push((name.clone(), RegisterIndex(dest.0 + i), *attr));
             }
         } else {
+            // The names come into scope after the last value, so that a value naming a variable
+            // the statement redeclares (`local a, b = b, a`) finds the outer one.
+            let mut new_locals = Vec::with_capacity(name_len);
             for (i, value) in local_statement.values.iter().enumerate() {
                 let expr = self.expression(value)?;
 
@@ -961,11 +964,7 @@ impl<S: StringInterner> Compiler<'_, S> {
 
                     let names = local_statement.names.iter().skip(val_len - 1);
                     for (j, (name, attr)) in (0..names_left).zip(names) {
-                        self.current_function.locals.push((
-                            name.clone(),
-                            RegisterIndex(dest.0 + j),
-                            *attr,
-                        ));
+                        new_locals.push((name.clone(), RegisterIndex(dest.0 + j), *attr));
                     }
                 } else {
                     let reg = self.expr_discharge(expr, ExprDestination::PushNew)?;
@@ -973,11 +972,10 @@ impl<S: StringInterner> Compiler<'_, S> {
                         .names
                         .get(i)
                         .ok_or(CompileErrorKind::Internal("missing local name"))?;
-                    self.current_function
-                        .locals
-                        .push((name.clone(), reg, *attr));
+                    new_locals.push((name.clone(), reg, *attr));
                 }
             }
+            self.current_function.locals.extend(new_locals);
         }
 
         Ok(())
@@ -1085,6 +1083,72 @@ impl<S: StringInterner> Compiler<'_, S> {
                 self.current_function.register_allocator.free(reg);
             }
         } else {
+            // As in PUC, the table and key of every indexed target are evaluated before the
+            // values, left to right, and a local or upvalue used there that the statement also
+            // assigns is copied (`check_conflict`): `t[i], i = 10, 2` sets `t[1]`, and
+            // `t[f()], x = 1, g()` calls `f` before `g`.
+            let mut assigned_locals = Vec::new();
+            let mut assigned_upvalues = Vec::new();
+            for target in &assignment.targets {
+                if let AssignmentTarget::Name(name) = target {
+                    match self.find_variable(name.clone())? {
+                        VariableDescriptor::Local(reg, _) => assigned_locals.push(reg),
+                        VariableDescriptor::UpValue(idx, _) => assigned_upvalues.push(idx),
+                        VariableDescriptor::Global(_) => {}
+                    }
+                }
+            }
+
+            // A table or key of an indexed target, ready for the assignment: left as it is when
+            // evaluating it has no effect and nothing in the statement changes it, otherwise
+            // evaluated now into a temporary register.
+            let prepare = |this: &mut Self,
+                           expr: ExprDescriptor<S::String>,
+                           temps: &mut Vec<RegisterIndex>|
+             -> Result<ExprDescriptor<S::String>, CompileErrorKind> {
+                Ok(match expr {
+                    ExprDescriptor::Constant(_) => expr,
+                    ExprDescriptor::Variable(VariableDescriptor::Local(reg, _))
+                        if !assigned_locals.contains(&reg) =>
+                    {
+                        expr
+                    }
+                    ExprDescriptor::Variable(VariableDescriptor::UpValue(idx, _))
+                        if !assigned_upvalues.contains(&idx) =>
+                    {
+                        expr
+                    }
+                    expr => {
+                        let reg = this.expr_discharge(expr, ExprDestination::AllocateNew)?;
+                        temps.push(reg);
+                        ExprDescriptor::Variable(VariableDescriptor::Local(
+                            reg,
+                            LocalAttributes::NONE,
+                        ))
+                    }
+                })
+            };
+
+            let mut places = Vec::with_capacity(target_len);
+            for target in &assignment.targets {
+                places.push(match target {
+                    AssignmentTarget::Name(_) => None,
+                    AssignmentTarget::Field(table, field) => {
+                        let mut temps = Vec::new();
+                        let table = self.suffixed_expression(table)?;
+                        let table = prepare(self, table, &mut temps)?;
+                        let key = match field {
+                            FieldSuffix::Named(name) => {
+                                ExprDescriptor::Constant(Constant::String(name.clone()))
+                            }
+                            FieldSuffix::Indexed(idx) => self.expression(idx)?,
+                        };
+                        let key = prepare(self, key, &mut temps)?;
+                        Some((table, key, temps))
+                    }
+                });
+            }
+
             let mut registers = Vec::with_capacity(target_len);
             for (i, value) in assignment.values.iter().enumerate() {
                 let expr = self.expression(value)?;
@@ -1105,12 +1169,18 @@ impl<S: StringInterner> Compiler<'_, S> {
                 }
             }
 
-            for (reg, target) in registers.into_iter().zip(&assignment.targets).rev() {
-                assign(
-                    self,
-                    target,
-                    ExprDescriptor::Variable(VariableDescriptor::Local(reg, LocalAttributes::NONE)),
-                )?;
+            let targets = registers.into_iter().zip(&assignment.targets).zip(places);
+            for ((reg, target), place) in targets.rev() {
+                let value =
+                    ExprDescriptor::Variable(VariableDescriptor::Local(reg, LocalAttributes::NONE));
+                if let Some((table, key, temps)) = place {
+                    self.set_table(table, key, value)?;
+                    for temp in temps {
+                        self.current_function.register_allocator.free(temp);
+                    }
+                } else {
+                    assign(self, target, value)?;
+                }
                 self.current_function.register_allocator.free(reg);
             }
         }

@@ -320,19 +320,17 @@ where
                         } else {
                             self.advance(2);
 
-                            match (self.peek(0)?, self.peek(1)?) {
-                                (Some(b'['), Some(b'=')) | (Some(b'['), Some(b'[')) => {
-                                    // long comment
-                                    self.read_long_string(false)?;
-                                }
-                                _ => {
-                                    // Short comment, read until end of line
-                                    while let Some(c) = self.peek(0)? {
-                                        if is_newline(c) {
-                                            break;
-                                        } else {
-                                            self.advance(1);
-                                        }
+                            if self.at_long_bracket()? {
+                                // long comment
+                                self.read_long_string(false)?;
+                            } else {
+                                // Short comment, read until end of line. `--[==x` is one too,
+                                // only a string has an invalid long bracket.
+                                while let Some(c) = self.peek(0)? {
+                                    if is_newline(c) {
+                                        break;
+                                    } else {
+                                        self.advance(1);
                                     }
                                 }
                             }
@@ -722,6 +720,18 @@ where
 
     // Read a [=*[...]=*] sequence with matching numbers of '='. If `into_string` is true, writes
     // the contained string into the string buffer.
+    // Whether a long bracket starts here: `[`, any number of `=` and another `[`.
+    fn at_long_bracket(&mut self) -> Result<bool, LexError> {
+        if self.peek(0)? != Some(b'[') {
+            return Ok(false);
+        }
+        let mut n = 1;
+        while self.peek(n)? == Some(b'=') {
+            n += 1;
+        }
+        Ok(self.peek(n)? == Some(b'['))
+    }
+
     fn read_long_string(&mut self, into_string: bool) -> Result<(), LexError> {
         debug_assert_eq!(self.peek(0)?, Some(b'['));
         self.advance(1);

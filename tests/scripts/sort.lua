@@ -27,3 +27,13 @@ do
     table.sort(list)
     assert(#list == 100 and is_sorted(list))
 end
+
+-- The argument checks of PUC's `sort`, without a position; the comparator is only checked when
+-- there is something to sort (Lua 5.4).
+do
+    local ok, err = pcall(table.sort, nil)
+    assert(not ok and err == "bad argument #1 to 'sort' (table expected, got nil)", err)
+    ok, err = pcall(table.sort, { 2, 1 }, true)
+    assert(not ok and err == "bad argument #2 to 'sort' (function expected, got boolean)", err)
+    assert(pcall(table.sort, { 1 }, true))
+end

@@ -102,7 +102,8 @@ fuzz/update-seeds.sh                                  # refresh the fuzz seeds
   takes nothing for strings, counts upvalues, threads and iterators, and counts an instance's
   objects against it alone when instances nest.
 - `tests/lua51/`: scripts compared byte for byte with PUC-Rio Lua 5.1.5 (`numbers`, `strings`,
-  `errors`, `tables`, `math`, `meta`, `loops`; the harness adds 5.1's `newproxy` for userdata).
+  `errors`, `tables`, `math`, `meta`, `loops`, `assign`; the harness adds 5.1's `newproxy` for
+  userdata).
   Where lunita's error wording differs on purpose (the VM's runtime errors), a script compares
   the outcome only.
 - `tests/scripts/*_54.lua`: default-mode scripts that also pass under PUC-Rio Lua 5.4.9 (run

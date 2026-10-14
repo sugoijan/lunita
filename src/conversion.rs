@@ -207,10 +207,17 @@ impl<'gc, T: FromValue<'gc>> FromValue<'gc> for Option<T> {
 impl<'gc, T: FromValue<'gc>> FromValue<'gc> for Vec<T> {
     fn from_value(ctx: Context<'gc>, value: Value<'gc>) -> Result<Self, TypeError> {
         if let Value::Table(table) = value {
-            (1..=table.length())
-                .into_iter()
-                .map(|i| table.get(ctx, i))
-                .collect()
+            // The border of a table with holes can be far past its entries (the powers of two up
+            // to `2^61` in the map part make it `2^61`), and walking up to it would take that
+            // long, outside any limit of the instance. A sequence has at least `length` entries.
+            let length = table.length();
+            if usize::try_from(length).map_or(true, |length| length > table.entries_bound()) {
+                return Err(TypeError {
+                    expected: "sequence",
+                    found: "table with holes",
+                });
+            }
+            (1..=length).map(|i| table.get(ctx, i)).collect()
         } else {
             Err(TypeError {
                 expected: "sequence",

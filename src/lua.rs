@@ -382,7 +382,9 @@ impl Lua {
     /// Set the resource limits of this instance, see [`Limits`].
     ///
     /// Limits only refuse new allocations, so lowering them below the memory already in use does
-    /// not free anything.
+    /// not free anything. An instance over its memory limit is treated as if an allocation had
+    /// just failed: the next [`Executor::step`](crate::Executor::step) stops the running script
+    /// with [`LimitError::Memory`] after one operation, whether or not that operation allocates.
     pub fn set_limits(&mut self, limits: Limits) {
         self.memory_limit = limits.memory;
         self.enter(|ctx| ctx.state.limits.set_limits(limits));

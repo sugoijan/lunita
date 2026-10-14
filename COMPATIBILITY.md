@@ -299,7 +299,9 @@ In both modes, against PUC 5.1.5 and 5.4.9:
   main chunk suspends the executor and its values become the chunk's result, where PUC raises
   "attempt to yield from outside a coroutine" (piccolo's design, which a host may use);
   `table.move` and `table.sort` are Lua code reading `math`, `type` and `error` from the globals
-  at call time, with their own error positions and no comparator validation; `load` with a reader
+  at call time, `sort` checking its arguments as 5.4 does in both modes (5.1 also checks the
+  comparator when there is nothing to sort) and an error from the comparator carrying
+  `sort.lua`'s position; `load` with a reader
   function lets the reader's errors propagate and names the chunk after its text; `next(t, 1.0)`
   with a float key is accepted (5.4 raises); NaN is formatted with its sign ("-nan", as glibc)
   where Apple's libc prints "nan"; PUC's limit of 200 nested C calls (nested `pcall`s) has no

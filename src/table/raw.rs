@@ -424,6 +424,14 @@ impl<'gc> RawTable<'gc> {
         self.length_with_probes().0
     }
 
+    /// An upper bound on the number of non-nil entries: the slots of the array part and the
+    /// entries of the map part, empty or dead ones included. It is bounded by the table's memory,
+    /// where a border ([`RawTable::length`]) of a table with holes is not: the powers of two up to
+    /// `2^61`, kept in the map part, make the border `2^61`.
+    pub fn entries_bound(&self) -> usize {
+        self.array.len().saturating_add(self.entries.len())
+    }
+
     /// Like [`RawTable::length`], also returning how many entries were probed to find the border,
     /// which is logarithmic in the size of the table.
     pub fn length_with_probes(&self) -> (i64, usize) {
