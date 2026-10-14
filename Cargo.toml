@@ -9,7 +9,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.95"
 authors = ["すごいジャン <me@sugoijan.dev>", "kyren <catherine@kyju.org>"]
@@ -27,7 +27,7 @@ hashbrown = { version = "0.17", default-features = false, features = ["inline-mo
 serde = "1.0"
 thiserror = "2.0"
 
-lunita = { path = "./", version = "0.1.0" }
+lunita = { path = "./", version = "0.1.1" }
 
 [package]
 name = "lunita"

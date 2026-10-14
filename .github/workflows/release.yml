@@ -37,13 +37,14 @@ jobs:
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
 
+      # Written outside the checkout: `cargo publish` refuses a working tree with changes.
       - name: Release notes from the changelog
         run: |
           awk -v version="$VERSION" '
             /^## / { printing = ($0 ~ "^## lunita " version "( |$)") ; next }
             printing { print }
-          ' CHANGELOG.md > release-notes.md
-          if [ ! -s release-notes.md ]; then
+          ' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
+          if [ ! -s "$RUNNER_TEMP/release-notes.md" ]; then
             echo "CHANGELOG.md has no \"## lunita $VERSION\" section"
             exit 1
           fi
@@ -79,5 +80,5 @@ jobs:
             echo "release $GITHUB_REF_NAME exists"
           else
             gh release create "$GITHUB_REF_NAME" --title "lunita $VERSION" \
-              --notes-file release-notes.md
+              --notes-file "$RUNNER_TEMP/release-notes.md"
           fi
