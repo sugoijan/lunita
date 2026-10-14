@@ -1,4 +1,4 @@
-## lunita 0.1.2 (unreleased)
+## lunita 0.1.2 (2026-10-14)
 
 ### Fixed
 
