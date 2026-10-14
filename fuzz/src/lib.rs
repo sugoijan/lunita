@@ -26,8 +26,8 @@ pub const STRING_LIMIT: usize = 1 << 20;
 pub const FUEL_PER_STEP: i32 = 1_000;
 pub const FUEL_BUDGET: i64 = 1_000_000;
 /// The most fuel a single step may use past its 1,000: work that is charged after it is done,
-/// such as moving the array part of a table on `table.insert` (at most 2 Mi values within the
-/// memory limit) or draining the fuel debt of a long string operation.
+/// such as moving the array part of a table on `table.insert` (at most 100,000 values in one
+/// step) or draining the fuel debt of a long string operation.
 pub const MAX_STEP_OVERSHOOT: i64 = 4_000_000;
 /// The longest a step may take: steps take tens of microseconds, and the gate of
 /// `tests/limits.rs` is 10 ms in a release build. This is a thousand times that, for the slower

@@ -139,9 +139,12 @@ fuzz/update-seeds.sh                                  # refresh the fuzz seeds
   with a 64 MB quarantine the workers ran out of memory loading the corpus, over 2 GB of RSS
   for 36–39 MB of live heap). No ASan error. The eight `oom-*` inputs of an earlier ASan run
   were the quarantine, not the inputs: replayed without ASan they run to the end or the fuel
-  budget in at most 9 MB of RSS. The later rounds of fixes (the checked stack growth, the frame
-  cap, the comment review) have had only a five-minute smoke run per target; a longer run is
-  due on an idle machine.
+  budget in at most 9 MB of RSS. After the later rounds of fixes (the checked stack growth, the
+  frame cap, the comment review, the whole-crate review and simplification, the bounded insert
+  shift), on 0.1.2 with the same `-a -s none` build, niced at load 40–70: `chunk -rss_limit_mb=2048
+  -timeout=30 -max_len=65536 -max_total_time=7200 -jobs=4 -workers=4` (5.24 × 10^6 executions,
+  corpus 67,586 → 77,280 files) and `grammar` with `-max_len=4096` and the same options
+  (1.83 × 10^6, corpus 65,174 → 68,760): no crash, timeout, slow unit or out-of-memory.
 
 Upstream tests changed: `tests/error.rs` (`error_unwind`), `tests/scripts/pcall.lua` and
 `tests/scripts/coroutine.lua`, because `error` adds the position PUC-Rio Lua adds;
@@ -272,4 +275,5 @@ Found by the reviews and left as they are, each a decision rather than a fix:
   memory limit can refuse; a host loading them under a limit would see a panic there.
 - `fuzz/seeds/` is generated from `tests/limits.rs` and committed so that the fuzzer starts
   without a build step; `tests/data/r2-collisions.txt` (400 KB) could be generated at test time.
-- A longer fuzz run on an idle machine, after the last rounds of fixes.
+- An ASan fuzz run on 0.1.2 (the two-hour run above had debug assertions but no sanitizer; the
+  last ASan run predates the whole-crate review).
