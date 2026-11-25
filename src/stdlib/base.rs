@@ -523,7 +523,7 @@ pub fn load_base<'gc>(ctx: Context<'gc>) -> Result<(), LimitError> {
 
     // DELIBERATE(puc): in Lua51 mode `load` takes strings too (5.1's takes functions only); the host
     // adds `loadstring` (see COMPATIBILITY.md).
-    ctx.set_global("load", Callback::from_fn(&ctx, load))?;
+    ctx.set_global("load", load_callback(ctx, ctx.globals()))?;
 
     ctx.set_global(
         "collectgarbage",
@@ -558,12 +558,48 @@ pub fn load_base<'gc>(ctx: Context<'gc>) -> Result<(), LimitError> {
 /// "chunk is too complex to compile" error, which `load` returns as its second result.
 pub const LOAD_MAX_WORK: u64 = 20_000;
 
+/// A `load` function whose chunks get `env` as their environment when the call gives no `env`
+/// argument. The base library's `load` is `load_callback(ctx, ctx.globals())`, as in PUC-Rio Lua.
+///
+/// The default environment belongs to the function, not to its caller: whoever holds the base
+/// library's `load` can read and write the globals through it, whatever environment their own
+/// code runs in and however the call reaches `load` (an alias, `pcall`, a coroutine, a helper
+/// function of the host). A host that runs a script in a restricted environment (see
+/// [`Closure::load_with_env`]) and lets it compile code gives it a `load` bound to that
+/// environment instead of the global one:
+///
+/// ```
+/// # use lunita::{Closure, Executor, ExternError, Lua, Table, stdlib};
+/// # fn main() -> Result<(), ExternError> {
+/// let mut lua = Lua::core();
+/// let executor = lua.try_enter(|ctx| {
+///     ctx.set_global("secret", 42)?;
+///
+///     let restricted = Table::new(&ctx);
+///     restricted.set(ctx, "load", stdlib::load_callback(ctx, restricted))?;
+///
+///     let closure =
+///         Closure::load_with_env(ctx, None, b"return load('return secret')()", restricted)?;
+///     Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
+/// })?;
+/// assert_eq!(lua.execute::<Option<i64>>(&executor)?, None);
+/// # Ok(())
+/// # }
+/// ```
+///
+/// An `env` argument is used as it is, as the caller could reach what it holds anyway.
+pub fn load_callback<'gc>(ctx: Context<'gc>, env: Table<'gc>) -> Callback<'gc> {
+    Callback::from_fn_with(&ctx, env, |env, ctx, _, stack| {
+        load(ctx, stack, Value::Table(*env))
+    })
+}
+
 // `load(chunk [, chunkname [, mode [, env]]])`, where `chunk` is a string or a function returning
-// the pieces of the chunk.
+// the pieces of the chunk, and `default_env` is the environment of the chunk without an `env`.
 fn load<'gc>(
     ctx: Context<'gc>,
-    _: Execution<'gc, '_>,
     mut stack: Stack<'gc, '_>,
+    default_env: Value<'gc>,
 ) -> Result<CallbackReturn<'gc>, Error<'gc>> {
     let has_env = stack.len() >= 4;
     let (chunk, chunk_name, mode, env): (Value, Option<String>, Option<String>, Value) =
@@ -571,7 +607,7 @@ fn load<'gc>(
     let options = LoadOptions {
         chunk_name,
         mode,
-        env: has_env.then_some(env),
+        env: if has_env { env } else { default_env },
     };
 
     match chunk {
@@ -719,7 +755,8 @@ pub fn chunk_id(compat: Compat, name: &[u8]) -> std::string::String {
 struct LoadOptions<'gc> {
     chunk_name: Option<String<'gc>>,
     mode: Option<String<'gc>>,
-    env: Option<Value<'gc>>,
+    // The environment of the chunk: the `env` argument, or the one the `load` function is bound to.
+    env: Value<'gc>,
 }
 
 impl<'gc> LoadOptions<'gc> {
@@ -757,8 +794,7 @@ impl<'gc> LoadOptions<'gc> {
                 let mut upvalues = TrackedVec::new();
                 if !proto.upvalues.is_empty() {
                     // A chunk's only upvalue is `_ENV`.
-                    let env = self.env.unwrap_or(Value::Table(ctx.globals()));
-                    upvalues.push(UpValue::new(&ctx, UpValueState::Closed(env)));
+                    upvalues.push(UpValue::new(&ctx, UpValueState::Closed(self.env)));
                 }
                 stack.replace(ctx, Closure::from_parts(&ctx, proto, upvalues));
             }

@@ -354,6 +354,10 @@ impl<'gc> Closure<'gc> {
     }
 
     /// Compile a top-level closure from source, using the given table as the `_ENV` table.
+    ///
+    /// The chunk reaches what `env` holds and what those values reach: the base library's `load`
+    /// compiles chunks with the globals as their environment, so a table that restricts a script
+    /// takes [`stdlib::load_callback`](crate::stdlib::load_callback) bound to it instead.
     pub fn load_with_env(
         ctx: Context<'gc>,
         name: Option<&str>,

@@ -258,6 +258,17 @@ and 0.024 µs at opt-level z.
 - **`LOAD_MAX_WORK`** (20,000 units of compiler work for `load` from Lua) and **`MAX_MATCH_STEPS`**
   (10^5 per match attempt) are fixed constants, chosen to keep the work of one call within a few
   milliseconds.
+- **`load` is bound to an environment, not to its caller.** The base library's `load` gives its
+  chunks the globals, as PUC does, so copying it into the table of a restricted chunk
+  (`Closure::load_with_env`) hands the globals to the script; the host gives such a script
+  `stdlib::load_callback(ctx, restricted)`. Taking the environment from the calling closure was
+  tried and dropped: the nearest Lua frame is not the code that supplied `load` and the source
+  (`load` as the body of a coroutine has no Lua frame below it; a function of the host shared
+  with the script, `function apply(f, ...) return f(...) end`, is a frame with the globals), a
+  closure without an `_ENV` upvalue has no environment to give, and recording one on every
+  closure keeps the environment alive for functions that never use it. `tests/load.rs` has these
+  cases. The other functions of the library that a restricted table shares are still shared
+  state: the `string` table is the `__index` of every string, for one.
 
 ## Left for the maintainer
 
