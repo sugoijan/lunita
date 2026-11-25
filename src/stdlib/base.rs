@@ -562,16 +562,28 @@ pub const LOAD_MAX_WORK: u64 = 20_000;
 // the pieces of the chunk.
 fn load<'gc>(
     ctx: Context<'gc>,
-    _: Execution<'gc, '_>,
+    exec: Execution<'gc, '_>,
     mut stack: Stack<'gc, '_>,
 ) -> Result<CallbackReturn<'gc>, Error<'gc>> {
     let has_env = stack.len() >= 4;
     let (chunk, chunk_name, mode, env): (Value, Option<String>, Option<String>, Value) =
         stack.consume(ctx)?;
+    let env = if has_env {
+        env
+    } else {
+        match exec.caller_environment() {
+            Some(environment) => {
+                // A Lua closure without a bound environment must not gain the context globals.
+                environment.unwrap_or(Value::Nil)
+            }
+            // Preserve the compatibility fallback when a host starts the callback directly.
+            None => Value::Table(ctx.globals()),
+        }
+    };
     let options = LoadOptions {
         chunk_name,
         mode,
-        env: has_env.then_some(env),
+        env,
     };
 
     match chunk {
@@ -719,7 +731,7 @@ pub fn chunk_id(compat: Compat, name: &[u8]) -> std::string::String {
 struct LoadOptions<'gc> {
     chunk_name: Option<String<'gc>>,
     mode: Option<String<'gc>>,
-    env: Option<Value<'gc>>,
+    env: Value<'gc>,
 }
 
 impl<'gc> LoadOptions<'gc> {
@@ -757,10 +769,12 @@ impl<'gc> LoadOptions<'gc> {
                 let mut upvalues = TrackedVec::new();
                 if !proto.upvalues.is_empty() {
                     // A chunk's only upvalue is `_ENV`.
-                    let env = self.env.unwrap_or(Value::Table(ctx.globals()));
-                    upvalues.push(UpValue::new(&ctx, UpValueState::Closed(env)));
+                    upvalues.push(UpValue::new(&ctx, UpValueState::Closed(self.env)));
                 }
-                stack.replace(ctx, Closure::from_parts(&ctx, proto, upvalues));
+                stack.replace(
+                    ctx,
+                    Closure::from_parts_with_env(&ctx, proto, upvalues, Some(self.env)),
+                );
             }
             Err(CompilerError::Limit(err)) => return Err(err.into()),
             Err(CompilerError::Parsing(err)) => stack.replace(ctx, (Value::Nil, err.to_string())),

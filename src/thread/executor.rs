@@ -753,6 +753,19 @@ impl<'gc, 'a> Execution<'gc, 'a> {
     pub fn upper_lua_frame(&self) -> Option<UpperLuaFrame<'gc>> {
         UpperLuaFrame::of(self.upper_frames.last()?)
     }
+
+    /// The environment bound to the nearest Lua closure below the running callback or sequence.
+    ///
+    /// The outer `Option` distinguishes a host call with no Lua caller from a Lua closure that was
+    /// constructed without an environment.
+    pub(crate) fn caller_environment(&self) -> Option<Option<Value<'gc>>> {
+        self.upper_frames.iter().rev().find_map(|frame| {
+            let Frame::Lua { closure, .. } = frame else {
+                return None;
+            };
+            Some(closure.environment())
+        })
+    }
 }
 
 pub struct CurrentThread<'gc> {

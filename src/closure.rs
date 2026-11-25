@@ -261,6 +261,9 @@ pub enum ClosureError {
 pub struct ClosureInner<'gc> {
     proto: Gc<'gc, FunctionPrototype<'gc>>,
     upvalues: TrackedVec<UpValue<'gc>>,
+    // The environment supplied when the top-level closure was created, inherited by nested
+    // closures even when the compiler does not need an `_ENV` upvalue for their own code.
+    environment: Option<Value<'gc>>,
     queued: Traced<ClosureInner<'static>>,
 }
 
@@ -316,6 +319,7 @@ impl<'gc> Closure<'gc> {
             ClosureInner {
                 proto,
                 upvalues,
+                environment: environment.map(Value::Table),
                 queued: Traced::new(),
             },
         )))
@@ -326,11 +330,31 @@ impl<'gc> Closure<'gc> {
         proto: Gc<'gc, FunctionPrototype<'gc>>,
         upvalues: TrackedVec<UpValue<'gc>>,
     ) -> Self {
+        let environment = proto
+            .upvalues
+            .iter()
+            .zip(upvalues.iter())
+            .find_map(|(descriptor, upvalue)| match (descriptor, upvalue.get()) {
+                (UpValueDescriptor::Environment, UpValueState::Closed(environment)) => {
+                    Some(environment)
+                }
+                _ => None,
+            });
+        Self::from_parts_with_env(mc, proto, upvalues, environment)
+    }
+
+    pub(crate) fn from_parts_with_env(
+        mc: &Mutation<'gc>,
+        proto: Gc<'gc, FunctionPrototype<'gc>>,
+        upvalues: TrackedVec<UpValue<'gc>>,
+        environment: Option<Value<'gc>>,
+    ) -> Self {
         Self(Gc::new(
             mc,
             ClosureInner {
                 proto,
                 upvalues,
+                environment,
                 queued: Traced::new(),
             },
         ))
@@ -375,5 +399,9 @@ impl<'gc> Closure<'gc> {
 
     pub fn upvalues(self) -> &'gc [UpValue<'gc>] {
         &Gc::as_ref(self.0).upvalues
+    }
+
+    pub(crate) fn environment(self) -> Option<Value<'gc>> {
+        self.0.environment
     }
 }

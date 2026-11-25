@@ -30,6 +30,7 @@ pub(super) fn run_vm<'gc>(
     let current_function = lua_frame.closure()?;
     let current_prototype = current_function.prototype();
     let current_upvalues = current_function.upvalues();
+    let current_environment = current_function.environment();
     // The executor consumes the fuel for the instructions run and the fuel debt after the batch.
     let fuel_left = i64::from(lua_frame.fuel.remaining());
     let mut registers = lua_frame.registers()?;
@@ -278,7 +279,8 @@ pub(super) fn run_vm<'gc>(
                     }
                 }
 
-                let closure = Closure::from_parts(&ctx, proto, upvalues);
+                let closure =
+                    Closure::from_parts_with_env(&ctx, proto, upvalues, current_environment);
                 registers.set(dest.0 as usize, Value::Function(Function::Closure(closure)))?;
             }
 
