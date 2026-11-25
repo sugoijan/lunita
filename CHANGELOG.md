@@ -1,3 +1,15 @@
+## lunita 0.1.3 (unreleased)
+
+### Added
+
+* `stdlib::load_callback(ctx, env)`, a `load` function bound to a table: its chunks get `env`
+  as their environment when the call gives none. The base library's `load` is the one bound to
+  the globals, as in PUC-Rio Lua, so a script that holds it reaches the globals whatever
+  environment its own chunk has. A host that runs a script in a restricted environment
+  (`Closure::load_with_env`) gives it `load_callback(ctx, restricted)` instead of the global
+  `load`. The environment is bound to the function and not looked up from the caller, so it is
+  the same through an alias, `pcall`, a coroutine or a function of the host.
+
 ## lunita 0.1.2 (2026-10-14)
 
 ### Fixed

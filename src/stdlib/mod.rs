@@ -7,7 +7,7 @@ mod string;
 mod table;
 
 pub use self::{
-    base::load_base,
+    base::{load_base, load_callback},
     coroutine::load_coroutine,
     io::load_io,
     math::{RandomState, load_math},
