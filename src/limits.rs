@@ -36,10 +36,10 @@
 //! thread at most `MAX_FRAMES` (200,000; 20,000 with `Compat::Lua51`) frames, a catchable "stack
 //! overflow" past them; the parser nests at most 200 levels; the pattern matcher takes at most
 //! `MAX_MATCH_STEPS` (10^5) steps per match attempt and 200 nested calls ("pattern too complex");
-//! `load` from Lua compiles at most `LOAD_MAX_WORK` (20,000) units of compiler work, about 20,000
-//! tokens or 320 KiB of source (past it `load` returns nil and "chunk is too complex to
-//! compile"); and the compiler charges `CompileBudget::BYTES_PER_TOKEN` (384) bytes per token
-//! against the memory limit.
+//! the host and Lua loaders compile at most `LOAD_MAX_WORK` (20,000) units of compiler work,
+//! about 20,000 tokens or 320 KiB of source (past it the host loader returns an error and Lua's
+//! `load` returns nil and "chunk is too complex to compile"); and the compiler charges
+//! `CompileBudget::BYTES_PER_TOKEN` (384) bytes per token against the memory limit.
 //!
 //! [`RuntimeError::downcast`]: crate::RuntimeError::downcast
 

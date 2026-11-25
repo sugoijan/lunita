@@ -10,6 +10,13 @@
   `load`. The environment is bound to the function and not looked up from the caller, so it is
   the same through an alias, `pcall`, a coroutine or a function of the host.
 
+### Fixed
+
+* `FunctionPrototype::compile`, `Closure::load` and `Closure::load_with_env` apply
+  `LOAD_MAX_WORK`, the same 20,000-unit compiler work ceiling as Lua's `load`, before an executor
+  exists. A host compiling a larger trusted chunk can use `FunctionPrototype::compile_with_budget`
+  with an explicit limit.
+
 ## lunita 0.1.2 (2026-10-14)
 
 ### Fixed

@@ -1,4 +1,42 @@
-use lunita::{Closure, Executor, ExternError, FunctionPrototype, Lua, Table, stdlib};
+use lunita::{
+    Closure, Executor, ExternError, FunctionPrototype, Lua, Table,
+    compiler::{BudgetError, CompileBudget, LOAD_MAX_WORK, ParseError, ParseErrorKind},
+    stdlib,
+};
+
+#[test]
+fn host_load_accepts_source_at_work_limit() -> Result<(), ExternError> {
+    let source = vec![
+        b' ';
+        LOAD_MAX_WORK as usize * CompileBudget::SOURCE_BYTES_PER_WORK
+    ];
+    Lua::core().try_enter(|ctx| {
+        Closure::load(ctx, None, &source)?;
+        Ok(())
+    })
+}
+
+#[test]
+fn host_load_rejects_source_over_work_limit() {
+    let source = vec![
+        b' ';
+        (LOAD_MAX_WORK as usize + 1) * CompileBudget::SOURCE_BYTES_PER_WORK
+    ];
+    let error = Lua::core()
+        .try_enter(|ctx| {
+            Closure::load(ctx, None, &source)?;
+            Ok(())
+        })
+        .unwrap_err();
+    let parse_error = error
+        .root_cause()
+        .downcast_ref::<ParseError>()
+        .expect("work limit must be reported as a parse error");
+    assert!(matches!(
+        &parse_error.kind,
+        ParseErrorKind::Budget(BudgetError::Work)
+    ));
+}
 
 // Runs `source` in a table holding `names` from the globals and a `load` bound to that table,
 // with the global `privileged` set and `visible` set in the table only. Returns the script's

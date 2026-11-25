@@ -6,7 +6,7 @@ use thiserror::Error;
 use crate::{
     Compat, Constant, Context, LimitError, String, Table, Value,
     compiler::{self, CompiledPrototype, FunctionRef, LineNumber},
-    compiler::{BudgetError, CompileBudget, CompileLimits, lexer::LexError},
+    compiler::{BudgetError, CompileBudget, CompileLimits, LOAD_MAX_WORK, lexer::LexError},
     constant::is_exact_float_integer,
     hash::HashKeys,
     memory::{Traced, TrackedVec, Written},
@@ -111,14 +111,15 @@ impl<'gc> FunctionPrototype<'gc> {
         new(mc, chunk_name, compiled_function, &map_string)
     }
 
-    /// Compile a chunk, within the memory and string length limits of the Lua instance (see
-    /// [`crate::limits`]).
+    /// Compile a chunk within [`LOAD_MAX_WORK`] and the memory and string length limits of the Lua
+    /// instance (see [`crate::limits`]). Use [`Self::compile_with_budget`] with an explicit work
+    /// limit for larger trusted chunks.
     pub fn compile(
         ctx: Context<'gc>,
         source_name: &str,
         source: &[u8],
     ) -> Result<FunctionPrototype<'gc>, CompilerError> {
-        let budget = CompileBudget::new(CompileLimits::for_context(ctx, None));
+        let budget = CompileBudget::new(CompileLimits::for_context(ctx, Some(LOAD_MAX_WORK)));
         Self::compile_with_budget(ctx, source_name, source, &budget)
     }
 

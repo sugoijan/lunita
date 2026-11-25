@@ -4,6 +4,13 @@ use thiserror::Error;
 
 use crate::Context;
 
+/// The most work the default host and Lua loaders allow for one chunk, so a compilation takes at
+/// most about 2–3 ms natively on an Apple M1 Max and 3–4 ms in wasm. Larger chunks (more than
+/// about 20,000 tokens or 320 KiB of source) fail with "chunk is too complex to compile".
+///
+/// Larger trusted chunks can be compiled with an explicit [`CompileBudget`].
+pub const LOAD_MAX_WORK: u64 = 20_000;
+
 /// Bounds on the resources a single compilation may use, `None` meaning unbounded.
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub struct CompileLimits {

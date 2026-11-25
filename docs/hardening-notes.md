@@ -255,9 +255,9 @@ and 0.024 µs at opt-level z.
   (the game sets one from `crypto.getRandomValues` for every play). With secret keys, probe
   sequences have chance length, so lookups are not charged per probe (hashbrown does not report
   probes); the border search of `#t` is charged per probe as before.
-- **`LOAD_MAX_WORK`** (20,000 units of compiler work for `load` from Lua) and **`MAX_MATCH_STEPS`**
-  (10^5 per match attempt) are fixed constants, chosen to keep the work of one call within a few
-  milliseconds.
+- **`LOAD_MAX_WORK`** (20,000 units of compiler work for the host and Lua loaders) and
+  **`MAX_MATCH_STEPS`** (10^5 per match attempt) are fixed constants, chosen to keep the work of
+  one call within a few milliseconds.
 - **`load` is bound to an environment, not to its caller.** The base library's `load` gives its
   chunks the globals, as PUC does, so copying it into the table of a restricted chunk
   (`Closure::load_with_env`) hands the globals to the script; the host gives such a script
