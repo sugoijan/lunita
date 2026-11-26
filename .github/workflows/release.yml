@@ -5,6 +5,13 @@
 # crates.io authenticates the workflow by its identity (Trusted Publishing); no token is stored.
 # Each crate's settings on crates.io must list this repository and `release.yml` as a trusted
 # publisher, which can only be done after the crate's first (manual) publish.
+#
+# A tag push runs this file as it is in the tagged commit, so the check that the tag is on master
+# only catches a mistake: a commit that drops the check still gets to run. What holds a release
+# back is in the settings, outside the tagged tree: a ruleset that lets only an admin create, move
+# or delete a `v*` tag, the `release` environment (with a required reviewer) that the publish job
+# deploys to, and that environment named in each crate's trusted publisher on crates.io, so a job
+# outside it gets no token.
 
 name: Release
 
@@ -23,18 +30,24 @@ jobs:
     name: Verify release provenance
     runs-on: ubuntu-latest
     steps:
+      # The commit of the event, not the tag by name: both jobs see the same commit even if the
+      # tag moves during the run.
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
+      # First parents only: a commit that reached master inside a merged branch was never a state
+      # of master.
       - name: Check that the tag is on master
         run: |
           git fetch --no-tags origin \
-            refs/heads/master:refs/remotes/origin/master
-          release_commit=$(git rev-parse --verify "HEAD^{commit}")
-          if ! git merge-base --is-ancestor \
-               "$release_commit" refs/remotes/origin/master; then
-            echo "tag $GITHUB_REF_NAME is not on master"
+            +refs/heads/master:refs/remotes/origin/master
+          release_commit=$(git rev-parse --verify "$GITHUB_SHA^{commit}")
+          git rev-list --first-parent refs/remotes/origin/master \
+            > "$RUNNER_TEMP/master-commits"
+          if ! grep -Fxq "$release_commit" "$RUNNER_TEMP/master-commits"; then
+            echo "tag $GITHUB_REF_NAME ($release_commit) is not on master"
             exit 1
           fi
 
@@ -42,11 +55,14 @@ jobs:
     name: Publish
     needs: verify-release
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Check that the tag is the version
