@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, rc::Rc};
 
 use lunita::{Table, Value, table::NextValue};
 use serde::de;
@@ -23,17 +23,121 @@ impl de::Error for Error {
     }
 }
 
+const DEFAULT_MAX_DEPTH: usize = 128;
+
+/// Options controlling deserialization from Lua values.
+#[derive(Debug, Copy, Clone)]
+#[non_exhaustive]
+pub struct Options {
+    /// The maximum number of nested Lua tables that may be traversed.
+    ///
+    /// The root table, when present, has depth one. A limit of zero rejects all tables but still
+    /// permits scalar values.
+    pub max_depth: usize,
+}
+
+impl Options {
+    /// Sets the maximum number of nested Lua tables that may be traversed.
+    pub const fn max_depth(mut self, max_depth: usize) -> Self {
+        self.max_depth = max_depth;
+        self
+    }
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            max_depth: DEFAULT_MAX_DEPTH,
+        }
+    }
+}
+
 pub fn from_value<'gc, T: de::Deserialize<'gc>>(value: Value<'gc>) -> Result<T, Error> {
     T::deserialize(Deserializer::from_value(value))
 }
 
+pub fn from_value_with<'gc, T: de::Deserialize<'gc>>(
+    value: Value<'gc>,
+    options: Options,
+) -> Result<T, Error> {
+    T::deserialize(Deserializer::from_value_with(value, options))
+}
+
+#[derive(Clone)]
+struct DeserializationContext<'gc> {
+    active_table: Option<Rc<ActiveTable<'gc>>>,
+    max_depth: usize,
+}
+
+struct ActiveTable<'gc> {
+    table: Table<'gc>,
+    parent: Option<Rc<ActiveTable<'gc>>>,
+    depth: usize,
+}
+
+impl<'gc> DeserializationContext<'gc> {
+    fn new(options: Options) -> Self {
+        Self {
+            active_table: None,
+            max_depth: options.max_depth,
+        }
+    }
+
+    fn enter_table(&self, table: Table<'gc>) -> Result<Self, Error> {
+        let mut active_table = self.active_table.clone();
+        while let Some(active) = active_table {
+            if active.table == table {
+                return Err(de::Error::custom(
+                    "cyclic table detected during deserialization",
+                ));
+            }
+            active_table = active.parent.clone();
+        }
+
+        let current_depth = self
+            .active_table
+            .as_ref()
+            .map_or(0, |active| active.depth);
+        if current_depth >= self.max_depth {
+            return Err(de::Error::custom(format_args!(
+                "maximum table nesting depth of {} exceeded",
+                self.max_depth
+            )));
+        }
+
+        Ok(Self {
+            active_table: Some(Rc::new(ActiveTable {
+                table,
+                parent: self.active_table.clone(),
+                depth: current_depth + 1,
+            })),
+            max_depth: self.max_depth,
+        })
+    }
+
+    fn deserializer(&self, value: Value<'gc>) -> Deserializer<'gc> {
+        Deserializer {
+            value,
+            context: self.clone(),
+        }
+    }
+}
+
 pub struct Deserializer<'gc> {
     value: Value<'gc>,
+    context: DeserializationContext<'gc>,
 }
 
 impl<'gc> Deserializer<'gc> {
     pub fn from_value(value: Value<'gc>) -> Self {
-        Self { value }
+        Self::from_value_with(value, Options::default())
+    }
+
+    pub fn from_value_with(value: Value<'gc>, options: Options) -> Self {
+        Self {
+            value,
+            context: DeserializationContext::new(options),
+        }
     }
 }
 
@@ -271,7 +375,8 @@ impl<'gc> de::Deserializer<'gc> for Deserializer<'gc> {
         V: de::Visitor<'gc>,
     {
         if let Value::Table(table) = self.value {
-            visitor.visit_seq(Seq::new(table))
+            let context = self.context.enter_table(table)?;
+            visitor.visit_seq(Seq::new(table, context))
         } else {
             Err(Error::TypeError {
                 expected: "table",
@@ -285,10 +390,12 @@ impl<'gc> de::Deserializer<'gc> for Deserializer<'gc> {
         V: de::Visitor<'gc>,
     {
         if let Value::Table(table) = self.value {
+            let context = self.context.enter_table(table)?;
             visitor.visit_seq(Tuple::new(
                 table,
                 len.try_into()
                     .map_err(|_| de::Error::custom("tuple length out of range"))?,
+                context,
             ))
         } else {
             Err(Error::TypeError {
@@ -315,7 +422,8 @@ impl<'gc> de::Deserializer<'gc> for Deserializer<'gc> {
         V: de::Visitor<'gc>,
     {
         if let Value::Table(table) = self.value {
-            visitor.visit_map(Map::new(table))
+            let context = self.context.enter_table(table)?;
+            visitor.visit_map(Map::new(table, context))
         } else {
             Err(Error::TypeError {
                 expected: "table",
@@ -346,12 +454,17 @@ impl<'gc> de::Deserializer<'gc> for Deserializer<'gc> {
         V: de::Visitor<'gc>,
     {
         match self.value {
-            Value::Table(table) => match table.next(Value::Nil) {
-                NextValue::Found { key, value } => visitor.visit_enum(Enum::new(key, value)),
-                NextValue::Last => Err(de::Error::custom("enum table has no entries")),
-                NextValue::NotFound => unreachable!(),
-            },
-            v => visitor.visit_enum(UnitEnum::new(v)),
+            Value::Table(table) => {
+                let context = self.context.enter_table(table)?;
+                match table.next(Value::Nil) {
+                    NextValue::Found { key, value } => {
+                        visitor.visit_enum(Enum::new(key, value, context))
+                    }
+                    NextValue::Last => Err(de::Error::custom("enum table has no entries")),
+                    NextValue::NotFound => unreachable!(),
+                }
+            }
+            v => visitor.visit_enum(UnitEnum::new(v, self.context)),
         }
     }
 
@@ -373,11 +486,16 @@ impl<'gc> de::Deserializer<'gc> for Deserializer<'gc> {
 pub struct Seq<'gc> {
     table: Table<'gc>,
     ind: i64,
+    context: DeserializationContext<'gc>,
 }
 
 impl<'gc> Seq<'gc> {
-    fn new(table: Table<'gc>) -> Self {
-        Self { table, ind: 1 }
+    fn new(table: Table<'gc>, context: DeserializationContext<'gc>) -> Self {
+        Self {
+            table,
+            ind: 1,
+            context,
+        }
     }
 }
 
@@ -392,7 +510,7 @@ impl<'gc> de::SeqAccess<'gc> for Seq<'gc> {
         if v.is_nil() {
             Ok(None)
         } else {
-            let res = Some(seed.deserialize(Deserializer::from_value(v))?);
+            let res = Some(seed.deserialize(self.context.deserializer(v))?);
             self.ind = self
                 .ind
                 .checked_add(1)
@@ -406,11 +524,17 @@ pub struct Tuple<'gc> {
     table: Table<'gc>,
     len: i64,
     ind: i64,
+    context: DeserializationContext<'gc>,
 }
 
 impl<'gc> Tuple<'gc> {
-    fn new(table: Table<'gc>, len: i64) -> Self {
-        Self { table, len, ind: 1 }
+    fn new(table: Table<'gc>, len: i64, context: DeserializationContext<'gc>) -> Self {
+        Self {
+            table,
+            len,
+            ind: 1,
+            context,
+        }
     }
 }
 
@@ -425,7 +549,7 @@ impl<'gc> de::SeqAccess<'gc> for Tuple<'gc> {
             Ok(None)
         } else {
             let v = self.table.get_raw(Value::Integer(self.ind));
-            let res = Some(seed.deserialize(Deserializer::from_value(v))?);
+            let res = Some(seed.deserialize(self.context.deserializer(v))?);
             self.ind += 1;
             Ok(res)
         }
@@ -436,14 +560,16 @@ pub struct Map<'gc> {
     table: Table<'gc>,
     key: Value<'gc>,
     value: Value<'gc>,
+    context: DeserializationContext<'gc>,
 }
 
 impl<'gc> Map<'gc> {
-    fn new(table: Table<'gc>) -> Self {
+    fn new(table: Table<'gc>, context: DeserializationContext<'gc>) -> Self {
         Self {
             table,
             key: Value::Nil,
             value: Value::Nil,
+            context,
         }
     }
 }
@@ -459,7 +585,7 @@ impl<'gc> de::MapAccess<'gc> for Map<'gc> {
             NextValue::Found { key, value } => {
                 self.key = key;
                 self.value = value;
-                seed.deserialize(Deserializer::from_value(self.key))
+                seed.deserialize(self.context.deserializer(self.key))
                     .map(Some)
             }
             NextValue::Last => Ok(None),
@@ -471,18 +597,27 @@ impl<'gc> de::MapAccess<'gc> for Map<'gc> {
     where
         V: de::DeserializeSeed<'gc>,
     {
-        seed.deserialize(Deserializer::from_value(self.value))
+        seed.deserialize(self.context.deserializer(self.value))
     }
 }
 
 pub struct Enum<'gc> {
     key: Value<'gc>,
     value: Value<'gc>,
+    context: DeserializationContext<'gc>,
 }
 
 impl<'gc> Enum<'gc> {
-    fn new(key: Value<'gc>, value: Value<'gc>) -> Self {
-        Self { key, value }
+    fn new(
+        key: Value<'gc>,
+        value: Value<'gc>,
+        context: DeserializationContext<'gc>,
+    ) -> Self {
+        Self {
+            key,
+            value,
+            context,
+        }
     }
 }
 
@@ -495,19 +630,20 @@ impl<'gc> de::EnumAccess<'gc> for Enum<'gc> {
         V: de::DeserializeSeed<'gc>,
     {
         Ok((
-            seed.deserialize(Deserializer::from_value(self.key))?,
-            Variant::new(self.value),
+            seed.deserialize(self.context.deserializer(self.key))?,
+            Variant::new(self.value, self.context),
         ))
     }
 }
 
 pub struct Variant<'gc> {
     value: Value<'gc>,
+    context: DeserializationContext<'gc>,
 }
 
 impl<'gc> Variant<'gc> {
-    fn new(value: Value<'gc>) -> Self {
-        Self { value }
+    fn new(value: Value<'gc>, context: DeserializationContext<'gc>) -> Self {
+        Self { value, context }
     }
 }
 
@@ -515,21 +651,21 @@ impl<'gc> de::VariantAccess<'gc> for Variant<'gc> {
     type Error = Error;
 
     fn unit_variant(self) -> Result<(), Error> {
-        de::Deserialize::deserialize(Deserializer::from_value(self.value))
+        de::Deserialize::deserialize(self.context.deserializer(self.value))
     }
 
     fn newtype_variant_seed<T>(self, seed: T) -> Result<T::Value, Error>
     where
         T: de::DeserializeSeed<'gc>,
     {
-        seed.deserialize(Deserializer::from_value(self.value))
+        seed.deserialize(self.context.deserializer(self.value))
     }
 
     fn tuple_variant<V>(self, len: usize, visitor: V) -> Result<V::Value, Error>
     where
         V: de::Visitor<'gc>,
     {
-        de::Deserializer::deserialize_tuple(Deserializer::from_value(self.value), len, visitor)
+        de::Deserializer::deserialize_tuple(self.context.deserializer(self.value), len, visitor)
     }
 
     fn struct_variant<V>(
@@ -540,17 +676,18 @@ impl<'gc> de::VariantAccess<'gc> for Variant<'gc> {
     where
         V: de::Visitor<'gc>,
     {
-        de::Deserializer::deserialize_map(Deserializer::from_value(self.value), visitor)
+        de::Deserializer::deserialize_map(self.context.deserializer(self.value), visitor)
     }
 }
 
 pub struct UnitEnum<'gc> {
     key: Value<'gc>,
+    context: DeserializationContext<'gc>,
 }
 
 impl<'gc> UnitEnum<'gc> {
-    fn new(key: Value<'gc>) -> Self {
-        Self { key }
+    fn new(key: Value<'gc>, context: DeserializationContext<'gc>) -> Self {
+        Self { key, context }
     }
 }
 
@@ -563,7 +700,7 @@ impl<'gc> de::EnumAccess<'gc> for UnitEnum<'gc> {
         V: de::DeserializeSeed<'gc>,
     {
         Ok((
-            seed.deserialize(Deserializer::from_value(self.key))?,
+            seed.deserialize(self.context.deserializer(self.key))?,
             UnitVariant::new(),
         ))
     }
@@ -643,5 +780,203 @@ fn is_sequence<'gc>(table: Table<'gc>) -> bool {
             NextValue::Last => return true,
             NextValue::NotFound => unreachable!(),
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fmt;
+
+    use lunita::{Lua, Table, Value};
+    use serde::de::{
+        self, Deserialize, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor,
+    };
+
+    use super::{Error, Options, from_value, from_value_with};
+
+    #[derive(Debug, PartialEq)]
+    enum Nested {
+        Integer(i64),
+        Sequence(Vec<Nested>),
+        Map(Vec<(String, Nested)>),
+    }
+
+    impl<'de> Deserialize<'de> for Nested {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: de::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(NestedVisitor)
+        }
+    }
+
+    struct NestedVisitor;
+
+    impl<'de> Visitor<'de> for NestedVisitor {
+        type Value = Nested;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("an integer or nested table")
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(Nested::Integer(value))
+        }
+
+        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut values = Vec::new();
+            while let Some(value) = sequence.next_element()? {
+                values.push(value);
+            }
+            Ok(Nested::Sequence(values))
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut values = Vec::new();
+            while let Some(entry) = map.next_entry()? {
+                values.push(entry);
+            }
+            Ok(Nested::Map(values))
+        }
+    }
+
+    #[derive(Debug)]
+    struct RecursiveEnum;
+
+    impl<'de> Deserialize<'de> for RecursiveEnum {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: de::Deserializer<'de>,
+        {
+            deserializer.deserialize_enum("RecursiveEnum", &["Node"], RecursiveEnumVisitor)
+        }
+    }
+
+    struct RecursiveEnumVisitor;
+
+    impl<'de> Visitor<'de> for RecursiveEnumVisitor {
+        type Value = RecursiveEnum;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a recursive enum")
+        }
+
+        fn visit_enum<A>(self, data: A) -> Result<Self::Value, A::Error>
+        where
+            A: EnumAccess<'de>,
+        {
+            let (_name, variant) = data.variant::<String>()?;
+            variant.newtype_variant::<RecursiveEnum>()?;
+            Ok(RecursiveEnum)
+        }
+    }
+
+    fn assert_cycle(error: Error) {
+        assert_eq!(
+            error.to_string(),
+            "cyclic table detected during deserialization"
+        );
+    }
+
+    #[test]
+    fn recursive_table_adapters_reject_cycles() {
+        Lua::core().enter(|ctx| {
+            let sequence = Table::new(&ctx);
+            sequence
+                .set_raw(&ctx, Value::Integer(1), sequence.into())
+                .unwrap();
+            assert_cycle(from_value::<Nested>(sequence.into()).unwrap_err());
+            assert_cycle(from_value::<(Nested,)>(sequence.into()).unwrap_err());
+
+            let first = Table::new(&ctx);
+            let second = Table::new(&ctx);
+            first
+                .set_raw(&ctx, Value::Integer(1), second.into())
+                .unwrap();
+            second
+                .set_raw(&ctx, Value::Integer(1), first.into())
+                .unwrap();
+            assert_cycle(from_value::<Nested>(first.into()).unwrap_err());
+
+            let map = Table::new(&ctx);
+            map.set(ctx, "self", map).unwrap();
+            assert_cycle(from_value::<Nested>(map.into()).unwrap_err());
+
+            let enumeration = Table::new(&ctx);
+            enumeration.set(ctx, "Node", enumeration).unwrap();
+            assert_cycle(from_value::<RecursiveEnum>(enumeration.into()).unwrap_err());
+        });
+    }
+
+    #[test]
+    fn table_depth_limit_is_configurable() {
+        Lua::core().enter(|ctx| {
+            assert_eq!(
+                from_value_with::<i64>(Value::Integer(7), Options::default().max_depth(0))
+                    .unwrap(),
+                7
+            );
+
+            let leaf = Table::new(&ctx);
+            let middle = Table::new(&ctx);
+            middle
+                .set_raw(&ctx, Value::Integer(1), leaf.into())
+                .unwrap();
+            let root = Table::new(&ctx);
+            root.set_raw(&ctx, Value::Integer(1), middle.into())
+                .unwrap();
+
+            let error = from_value_with::<Nested>(
+                root.into(),
+                Options::default().max_depth(2),
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "maximum table nesting depth of 2 exceeded"
+            );
+
+            let value = from_value_with::<Nested>(
+                root.into(),
+                Options::default().max_depth(3),
+            )
+            .unwrap();
+            assert_eq!(
+                value,
+                Nested::Sequence(vec![Nested::Sequence(vec![Nested::Sequence(vec![])])])
+            );
+        });
+    }
+
+    #[test]
+    fn repeated_acyclic_tables_are_allowed() {
+        Lua::core().enter(|ctx| {
+            let child = Table::new(&ctx);
+            child
+                .set_raw(&ctx, Value::Integer(1), Value::Integer(7))
+                .unwrap();
+            let root = Table::new(&ctx);
+            root.set_raw(&ctx, Value::Integer(1), child.into())
+                .unwrap();
+            root.set_raw(&ctx, Value::Integer(2), child.into())
+                .unwrap();
+
+            assert_eq!(
+                from_value::<Nested>(root.into()).unwrap(),
+                Nested::Sequence(vec![
+                    Nested::Sequence(vec![Nested::Integer(7)]),
+                    Nested::Sequence(vec![Nested::Integer(7)]),
+                ])
+            );
+        });
     }
 }

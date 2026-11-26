@@ -5,7 +5,7 @@ pub mod ser;
 use lunita::{LimitError, Lua};
 
 pub use self::{
-    de::from_value,
+    de::{Options as DeOptions, from_value, from_value_with},
     ser::{Options as SerOptions, to_value, to_value_with},
 };
 
