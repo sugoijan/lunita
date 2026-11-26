@@ -74,8 +74,9 @@ pub fn load_table<'gc>(ctx: Context<'gc>) -> Result<(), LimitError> {
 
     // `sort` and `move` are Lua code; a callback checks the arguments as PUC does (with the
     // caller's position, the mode's rules, and immune to what the script did to the globals) and
-    // then calls it. The sources always compile, unless the instance is already past its memory
-    // limit.
+    // then calls it. The sources always compile (they take under 1,300 units of compiler work,
+    // far within the `HOST_LOAD_MAX_WORK` of `Closure::load`), unless the instance is already
+    // past its memory limit.
     let data = include_str!("table/sort.lua");
     if let Ok(sort) = Closure::load(ctx, Some("table/sort.lua"), data.as_bytes()) {
         let sort = Callback::from_fn_with(&ctx, sort, |sort, ctx, _, stack| {

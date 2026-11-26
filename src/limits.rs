@@ -36,10 +36,16 @@
 //! thread at most `MAX_FRAMES` (200,000; 20,000 with `Compat::Lua51`) frames, a catchable "stack
 //! overflow" past them; the parser nests at most 200 levels; the pattern matcher takes at most
 //! `MAX_MATCH_STEPS` (10^5) steps per match attempt and 200 nested calls ("pattern too complex");
-//! `load` from Lua compiles at most `LOAD_MAX_WORK` (20,000) units of compiler work, about 20,000
-//! tokens or 320 KiB of source (past it `load` returns nil and "chunk is too complex to
-//! compile"); and the compiler charges `CompileBudget::BYTES_PER_TOKEN` (384) bytes per token
-//! against the memory limit.
+//! `load` from Lua compiles at most `LOAD_MAX_WORK` (20,000) units of compiler work, 15 to 35 KiB
+//! of ordinary code (past it `load` returns nil and "chunk is too complex to compile"), and the
+//! host loaders `Closure::load`, `Closure::load_with_env` and `FunctionPrototype::compile` at
+//! most `HOST_LOAD_MAX_WORK` (10,000,000) units, several megabytes of it (past it they return an
+//! error, see [`CompilerError::is_work_limit`](crate::CompilerError::is_work_limit));
+//! `FunctionPrototype::compile_with_budget` compiles with another work limit or with none; and
+//! the compiler charges `CompileBudget::BYTES_PER_TOKEN` (384) bytes per token against the memory
+//! limit. A unit of compiler work is 16 bytes of source, a token, or a local, upvalue or label
+//! compared while resolving a name or a jump, so a chunk with many locals in scope costs more
+//! (see `CompileBudget::work`).
 //!
 //! [`RuntimeError::downcast`]: crate::RuntimeError::downcast
 

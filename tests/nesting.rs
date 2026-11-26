@@ -11,6 +11,9 @@ const STACK_SIZE: usize = 16 << 20;
 enum Outcome {
     Ok,
     CompileError,
+    // The compiler work limit of `Closure::load`, which no source here is meant to reach: a
+    // chunk refused for its size before it is parsed tests no guard of the parser or compiler.
+    WorkLimit,
     RuntimeError,
 }
 
@@ -19,11 +22,14 @@ fn run(source: String) -> Outcome {
         .stack_size(STACK_SIZE)
         .spawn(move || {
             let mut lua = Lua::core();
-            let Ok(executor) = lua.try_enter(|ctx| {
-                let closure = Closure::load(ctx, None, source.as_bytes())?;
-                Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
-            }) else {
-                return Outcome::CompileError;
+            let loaded = lua.enter(|ctx| {
+                Closure::load(ctx, None, source.as_bytes())
+                    .map(|closure| ctx.stash(Executor::start(ctx, closure.into(), ())))
+            });
+            let executor = match loaded {
+                Ok(executor) => executor,
+                Err(err) if err.is_work_limit() => return Outcome::WorkLimit,
+                Err(_) => return Outcome::CompileError,
             };
             match lua.execute::<()>(&executor) {
                 Ok(()) => Outcome::Ok,
@@ -126,7 +132,9 @@ fn deepest_accepted_nesting() {
             match run(nested(prefix, open, middle, close, n)) {
                 Outcome::Ok => accepted = n,
                 Outcome::CompileError => rejected = n,
-                Outcome::RuntimeError => panic!("{open}: runtime error at depth {n}"),
+                outcome @ (Outcome::RuntimeError | Outcome::WorkLimit) => {
+                    panic!("{open}: {outcome:?} at depth {n}")
+                }
             }
         }
         assert!(accepted >= 40, "{open}: only {accepted} levels accepted");

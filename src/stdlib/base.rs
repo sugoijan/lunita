@@ -13,7 +13,7 @@ use crate::{
     String, Table, TypeError, Value, Variadic,
     closure::{UpValue, UpValueState},
     compat::Compat,
-    compiler::{CompileBudget, CompileLimits},
+    compiler::{CompileBudget, CompileLimits, LOAD_MAX_WORK},
     fuel::{cost, fuel_for},
     limits::ByteBuffer,
     memory::TrackedVec,
@@ -551,12 +551,6 @@ pub fn load_base<'gc>(ctx: Context<'gc>) -> Result<(), LimitError> {
     )?;
     Ok(())
 }
-
-/// The most work `load` does to compile a chunk (see [`CompileBudget::work`]), so that a single
-/// `load` call fits in an `Executor` step: at most about 2–3 ms natively on an Apple M1 Max, and
-/// 3–4 ms in wasm. Larger chunks (more than about 20,000 tokens, or 320 KiB of source) are a
-/// "chunk is too complex to compile" error, which `load` returns as its second result.
-pub const LOAD_MAX_WORK: u64 = 20_000;
 
 /// A `load` function whose chunks get `env` as their environment when the call gives no `env`
 /// argument. The base library's `load` is `load_callback(ctx, ctx.globals())`, as in PUC-Rio Lua.
