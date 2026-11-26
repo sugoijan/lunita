@@ -32,7 +32,10 @@ what is still open.
   `## lunita <version>` section at the top of CHANGELOG.md: `.github/workflows/release.yml`
   publishes `lunita` and then `lunita-util` to crates.io (Trusted Publishing from this
   repository, no stored token; a version already published is skipped) and makes the GitHub
-  release with that changelog section as its notes.
+  release with that changelog section as its notes. The workflow refuses a tag that is not on
+  master's first-parent history, but it runs as the tagged commit has it, so the settings are
+  what guard a release: only an admin may create, move or delete a `v*` tag (a ruleset), and
+  the publish job deploys to the `release` environment, which waits for a reviewer.
 - Behaviour that differs from PUC-Rio Lua may change to match it, and anything that already
   matches must keep matching; a difference kept on purpose is marked where it lives in the code
   with a comment holding `DELIBERATE(puc)` (pointing at COMPATIBILITY.md) or, for a cost-model
