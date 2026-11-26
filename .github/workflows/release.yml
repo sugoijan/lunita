@@ -13,16 +13,38 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  verify-release:
+    name: Verify release provenance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check that the tag is on master
+        run: |
+          git fetch --no-tags origin \
+            refs/heads/master:refs/remotes/origin/master
+          release_commit=$(git rev-parse --verify "HEAD^{commit}")
+          if ! git merge-base --is-ancestor \
+               "$release_commit" refs/remotes/origin/master; then
+            echo "tag $GITHUB_REF_NAME is not on master"
+            exit 1
+          fi
+
   publish:
     name: Publish
+    needs: verify-release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
