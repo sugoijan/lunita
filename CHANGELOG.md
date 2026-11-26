@@ -10,12 +10,23 @@
   `load`. The environment is bound to the function and not looked up from the caller, so it is
   the same through an alias, `pcall`, a coroutine or a function of the host.
 
-### Fixed
+* `CompilerError::is_work_limit`, true of a chunk that took more compiler work than its budget
+  allows, whether the parser or the compiler ran out of it.
+* `compiler::LOAD_MAX_WORK` (the 20,000 units of Lua's `load`) and
+  `compiler::HOST_LOAD_MAX_WORK` are public.
 
-* `FunctionPrototype::compile`, `Closure::load` and `Closure::load_with_env` apply
-  `LOAD_MAX_WORK`, the same 20,000-unit compiler work ceiling as Lua's `load`, before an executor
-  exists. A host compiling a larger trusted chunk can use `FunctionPrototype::compile_with_budget`
-  with an explicit limit.
+### Changed
+
+* **Breaking for hosts that compile very large chunks:** `FunctionPrototype::compile`,
+  `Closure::load` and `Closure::load_with_env` compile at most `HOST_LOAD_MAX_WORK`
+  (10,000,000) units of compiler work, where they were unbounded, and return a "chunk is too
+  complex to compile" error past it. They run before an executor exists, so no fuel bounds them,
+  and resolving names can take time quadratic in the size of a chunk; the limit holds a
+  compilation to about a second. It is several megabytes of ordinary source (0.5 to 1.3 units
+  per byte), far less of a chunk that names globals with hundreds of locals in scope. A host
+  compiling a larger chunk it trusts, or wanting a tighter bound, uses
+  `FunctionPrototype::compile_with_budget` with its own `CompileLimits` and binds the prototype
+  with `Closure::new`. Lua's `load` keeps its 20,000 units.
 
 ## lunita 0.1.2 (2026-10-14)
 

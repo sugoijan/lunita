@@ -52,8 +52,10 @@ lua.execute::<()>(&executor)?;
 `Lua::execute` runs the executor to completion, collecting garbage between steps. A host that
 needs to bound each step gives `Executor::step` its own `Fuel`; see `examples/` for a REPL and
 the ways to call Lua functions, bind Rust callbacks and define userdata. `Closure::load` and
-`Closure::load_with_env` also bound compiler work before an executor exists; a host compiling a
-larger trusted chunk can use `FunctionPrototype::compile_with_budget` with an explicit budget.
+`Closure::load_with_env` run before an executor exists, so they bound the work of compiling a
+chunk themselves (`HOST_LOAD_MAX_WORK`, several megabytes of ordinary source); a host compiling a
+larger chunk it trusts, or wanting a tighter bound, uses `FunctionPrototype::compile_with_budget`
+with its own budget.
 
 ## Design
 

@@ -8,7 +8,7 @@ mod register_allocator;
 pub mod string_utils;
 
 pub use self::{
-    budget::{BudgetError, CompileBudget, CompileLimits, LOAD_MAX_WORK},
+    budget::{BudgetError, CompileBudget, CompileLimits, HOST_LOAD_MAX_WORK, LOAD_MAX_WORK},
     compiler::{
         CompileError, CompileErrorKind, CompiledPrototype, FunctionRef, compile_chunk,
         compile_chunk_with_budget,

@@ -35,7 +35,7 @@ use peak_alloc::PeakAlloc;
 use lunita::{
     Callback, CallbackReturn, Closure, Executor, Fuel, FunctionPrototype, Limits, Lua,
     StashedExecutor, Value, Variadic,
-    compiler::{CompileBudget, CompileLimits},
+    compiler::{CompileBudget, CompileLimits, HOST_LOAD_MAX_WORK},
 };
 
 #[global_allocator]
@@ -890,7 +890,7 @@ fn run(case: &Case, samples: &mut Vec<Sample>) -> Record {
     let mut compile_work = 0;
     let start = Instant::now();
     let executor: Result<StashedExecutor, _> = lua.try_enter(|ctx| {
-        let budget = CompileBudget::new(CompileLimits::for_context(ctx, None));
+        let budget = CompileBudget::new(CompileLimits::for_context(ctx, Some(HOST_LOAD_MAX_WORK)));
         let proto = FunctionPrototype::compile_with_budget(ctx, &case.id, source, &budget);
         compile_work = budget.work();
         let closure = Closure::new(&ctx, proto?, Some(ctx.globals())).unwrap();

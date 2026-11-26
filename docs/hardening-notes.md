@@ -255,9 +255,20 @@ and 0.024 µs at opt-level z.
   (the game sets one from `crypto.getRandomValues` for every play). With secret keys, probe
   sequences have chance length, so lookups are not charged per probe (hashbrown does not report
   probes); the border search of `#t` is charged per probe as before.
-- **`LOAD_MAX_WORK`** (20,000 units of compiler work for the host and Lua loaders) and
-  **`MAX_MATCH_STEPS`** (10^5 per match attempt) are fixed constants, chosen to keep the work of
-  one call within a few milliseconds.
+- **`LOAD_MAX_WORK`** (20,000 units of compiler work for `load` from Lua) and **`MAX_MATCH_STEPS`**
+  (10^5 per match attempt) are fixed constants, chosen to keep the work of one call within a few
+  milliseconds.
+- **`HOST_LOAD_MAX_WORK`** (10,000,000 units of compiler work for `Closure::load`,
+  `Closure::load_with_env` and `FunctionPrototype::compile`) bounds a compilation by the host,
+  which no executor's fuel does: resolving a name costs a unit per local and upvalue compared, up
+  to every enclosing function, so a hostile chunk takes time quadratic in its size. The host
+  loaders do not share `LOAD_MAX_WORK` because ordinary code costs 0.5 to 1.3 units per byte, so
+  20,000 units is 15 to 35 KiB of it (`tests/lua51/errors.lua`, 6.3 KiB, takes 8,681). At up to
+  0.093 µs a unit (0.14 µs in wasm) the host bound is about 1 s (1.4 s); the scripts measured
+  for it took at most 0.06 µs a unit. Of thirteen scripts and generated tables of 80 to 600 KiB
+  that ship with Neovim, Nmap and gnuplot, Nmap's `idnaMappings.lua` takes 4,231,979 units and
+  the others at most 130,106. A host that wants another bound, or none for chunks it trusts,
+  uses `FunctionPrototype::compile_with_budget`.
 - **`load` is bound to an environment, not to its caller.** The base library's `load` gives its
   chunks the globals, as PUC does, so copying it into the table of a restricted chunk
   (`Closure::load_with_env`) hands the globals to the script; the host gives such a script

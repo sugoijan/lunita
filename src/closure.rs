@@ -6,7 +6,7 @@ use thiserror::Error;
 use crate::{
     Compat, Constant, Context, LimitError, String, Table, Value,
     compiler::{self, CompiledPrototype, FunctionRef, LineNumber},
-    compiler::{BudgetError, CompileBudget, CompileLimits, LOAD_MAX_WORK, lexer::LexError},
+    compiler::{BudgetError, CompileBudget, CompileLimits, HOST_LOAD_MAX_WORK, lexer::LexError},
     constant::is_exact_float_integer,
     hash::HashKeys,
     memory::{Traced, TrackedVec, Written},
@@ -27,6 +27,35 @@ pub enum CompilerError {
     /// Compiling the chunk would exceed the memory or string length limit of the Lua instance.
     #[error("limit error")]
     Limit(#[from] LimitError),
+}
+
+impl CompilerError {
+    /// Whether the chunk took more work to compile than its budget allows
+    /// ([`CompileLimits::work`]): "chunk is too complex to compile".
+    ///
+    /// The work limit is not a [`LimitError`], as it does not stop the instance. It is reported
+    /// by the phase that ran out of budget, as a [`CompilerError::Parsing`] with
+    /// [`ParseErrorKind::Budget`](compiler::ParseErrorKind::Budget) while reading the source or
+    /// as a [`CompilerError::Compilation`] with
+    /// [`CompileErrorKind::Budget`](compiler::CompileErrorKind::Budget) while resolving names and
+    /// jumps; this is true of both.
+    pub fn is_work_limit(&self) -> bool {
+        match self {
+            CompilerError::Parsing(err) => {
+                matches!(
+                    err.kind,
+                    compiler::ParseErrorKind::Budget(BudgetError::Work)
+                )
+            }
+            CompilerError::Compilation(err) => {
+                matches!(
+                    err.kind,
+                    compiler::CompileErrorKind::Budget(BudgetError::Work)
+                )
+            }
+            CompilerError::Limit(_) => false,
+        }
+    }
 }
 
 /// A compiled Lua function.
@@ -111,22 +140,44 @@ impl<'gc> FunctionPrototype<'gc> {
         new(mc, chunk_name, compiled_function, &map_string)
     }
 
-    /// Compile a chunk within [`LOAD_MAX_WORK`] and the memory and string length limits of the Lua
-    /// instance (see [`crate::limits`]). Use [`Self::compile_with_budget`] with an explicit work
-    /// limit for larger trusted chunks.
+    /// Compile a chunk within [`HOST_LOAD_MAX_WORK`] units of compiler work and the memory and
+    /// string length limits of the Lua instance (see [`crate::limits`]).
+    ///
+    /// A chunk past the work limit is an error that [`CompilerError::is_work_limit`] tells apart.
+    /// Use [`Self::compile_with_budget`] to compile with another work limit or with none.
     pub fn compile(
         ctx: Context<'gc>,
         source_name: &str,
         source: &[u8],
     ) -> Result<FunctionPrototype<'gc>, CompilerError> {
-        let budget = CompileBudget::new(CompileLimits::for_context(ctx, Some(LOAD_MAX_WORK)));
+        let budget = CompileBudget::new(CompileLimits::for_context(ctx, Some(HOST_LOAD_MAX_WORK)));
         Self::compile_with_budget(ctx, source_name, source, &budget)
     }
 
     /// Compile a chunk, charging the resources used to `budget`.
     ///
     /// Exceeding the memory or string length limits of the budget is a [`CompilerError::Limit`]
-    /// (and marks the limit as exceeded, see [`Context::exceed_limit`]).
+    /// (and marks the limit as exceeded, see [`Context::exceed_limit`]). Exceeding its work limit
+    /// is a parse or compile error, see [`CompilerError::is_work_limit`].
+    ///
+    /// The default loaders use `CompileLimits::for_context(ctx, Some(HOST_LOAD_MAX_WORK))`. A
+    /// host that compiles a larger chunk it trusts gives `None` for the work, and binds the
+    /// prototype to its environment as [`Closure::load_with_env`] does:
+    ///
+    /// ```
+    /// # use lunita::{Closure, FunctionPrototype, Lua, compiler::{CompileBudget, CompileLimits}};
+    /// # fn main() -> Result<(), lunita::ExternError> {
+    /// # let mut lua = Lua::core();
+    /// # let source = b"return 1";
+    /// lua.try_enter(|ctx| {
+    ///     let budget = CompileBudget::new(CompileLimits::for_context(ctx, None));
+    ///     let proto = FunctionPrototype::compile_with_budget(ctx, "trusted", source, &budget)?;
+    ///     let closure = Closure::new(&ctx, proto, Some(ctx.globals()))?;
+    /// #   let _ = closure;
+    ///     Ok(())
+    /// })
+    /// # }
+    /// ```
     pub fn compile_with_budget(
         ctx: Context<'gc>,
         source_name: &str,
@@ -346,6 +397,9 @@ impl<'gc> Closure<'gc> {
     }
 
     /// Compile a top-level closure from source, using the globals table as the `_ENV` table.
+    ///
+    /// The chunk compiles within [`HOST_LOAD_MAX_WORK`] units of compiler work, as described for
+    /// [`Self::load_with_env`].
     pub fn load(
         ctx: Context<'gc>,
         name: Option<&str>,
@@ -359,6 +413,12 @@ impl<'gc> Closure<'gc> {
     /// The chunk reaches what `env` holds and what those values reach: the base library's `load`
     /// compiles chunks with the globals as their environment, so a table that restricts a script
     /// takes [`stdlib::load_callback`](crate::stdlib::load_callback) bound to it instead.
+    ///
+    /// The chunk compiles within [`HOST_LOAD_MAX_WORK`] units of compiler work (several megabytes
+    /// of ordinary source), as no executor bounds a compilation by the host; past them the result
+    /// is an error for which [`CompilerError::is_work_limit`] is true. To compile with another
+    /// work limit or with none, make the prototype with [`FunctionPrototype::compile_with_budget`]
+    /// and bind it with `Closure::new(&ctx, proto, Some(env))`.
     pub fn load_with_env(
         ctx: Context<'gc>,
         name: Option<&str>,

@@ -18,7 +18,7 @@ use std::cell::RefCell;
 use lunita::{
     Callback, CallbackReturn, Closure, Executor, Fuel, FunctionPrototype, Limits, Lua,
     StashedExecutor, Value, Variadic,
-    compiler::{CompileBudget, CompileLimits},
+    compiler::{CompileBudget, CompileLimits, HOST_LOAD_MAX_WORK},
 };
 
 const MEMORY_LIMIT: usize = 32 << 20;
@@ -69,7 +69,8 @@ pub extern "C" fn start() -> u32 {
         });
         // As `Closure::load` does, with the budget at hand to read the work done.
         let executor = lua.try_enter(|ctx| {
-            let budget = CompileBudget::new(CompileLimits::for_context(ctx, None));
+            let budget =
+                CompileBudget::new(CompileLimits::for_context(ctx, Some(HOST_LOAD_MAX_WORK)));
             let proto =
                 FunctionPrototype::compile_with_budget(ctx, "case", &state.source[..], &budget);
             state.compile_work = budget.work();
