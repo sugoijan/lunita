@@ -28,6 +28,17 @@
   `FunctionPrototype::compile_with_budget` with its own `CompileLimits` and binds the prototype
   with `Closure::new`. Lua's `load` keeps its 20,000 units.
 
+* **Breaking for hosts that deserialize very deep or very large tables:** `lunita-util`'s
+  `serde::from_value` returns an error for a table that contains itself, for tables nested more
+  than 128 deep and past 10,000,000 values read out of tables, where it was unbounded. The
+  tables are the script's and the native stack and the time are the host's: a table that held
+  itself overflowed the stack, and 64 tables that each hold the next one twice are 2^64 values,
+  since a table is deserialized once for every path that leads to it (it still is, each time
+  counted). The default depth takes about 250 KiB of stack unoptimized, and the default number
+  of values up to about three seconds in a release build. A host with other needs passes a
+  `serde::DeOptions` with `max_depth` and `max_values` to the new `serde::from_value_with` or
+  `Deserializer::from_value_with`.
+
 ## lunita 0.1.2 (2026-10-14)
 
 ### Fixed
