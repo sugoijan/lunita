@@ -94,10 +94,7 @@ impl<'gc> DeserializationContext<'gc> {
             active_table = active.parent.clone();
         }
 
-        let current_depth = self
-            .active_table
-            .as_ref()
-            .map_or(0, |active| active.depth);
+        let current_depth = self.active_table.as_ref().map_or(0, |active| active.depth);
         if current_depth >= self.max_depth {
             return Err(de::Error::custom(format_args!(
                 "maximum table nesting depth of {} exceeded",
@@ -608,11 +605,7 @@ pub struct Enum<'gc> {
 }
 
 impl<'gc> Enum<'gc> {
-    fn new(
-        key: Value<'gc>,
-        value: Value<'gc>,
-        context: DeserializationContext<'gc>,
-    ) -> Self {
+    fn new(key: Value<'gc>, value: Value<'gc>, context: DeserializationContext<'gc>) -> Self {
         Self {
             key,
             value,
@@ -788,9 +781,7 @@ mod tests {
     use std::fmt;
 
     use lunita::{Lua, Table, Value};
-    use serde::de::{
-        self, Deserialize, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor,
-    };
+    use serde::de::{self, Deserialize, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor};
 
     use super::{Error, Options, from_value, from_value_with};
 
@@ -921,8 +912,7 @@ mod tests {
     fn table_depth_limit_is_configurable() {
         Lua::core().enter(|ctx| {
             assert_eq!(
-                from_value_with::<i64>(Value::Integer(7), Options::default().max_depth(0))
-                    .unwrap(),
+                from_value_with::<i64>(Value::Integer(7), Options::default().max_depth(0)).unwrap(),
                 7
             );
 
@@ -935,21 +925,15 @@ mod tests {
             root.set_raw(&ctx, Value::Integer(1), middle.into())
                 .unwrap();
 
-            let error = from_value_with::<Nested>(
-                root.into(),
-                Options::default().max_depth(2),
-            )
-            .unwrap_err();
+            let error = from_value_with::<Nested>(root.into(), Options::default().max_depth(2))
+                .unwrap_err();
             assert_eq!(
                 error.to_string(),
                 "maximum table nesting depth of 2 exceeded"
             );
 
-            let value = from_value_with::<Nested>(
-                root.into(),
-                Options::default().max_depth(3),
-            )
-            .unwrap();
+            let value =
+                from_value_with::<Nested>(root.into(), Options::default().max_depth(3)).unwrap();
             assert_eq!(
                 value,
                 Nested::Sequence(vec![Nested::Sequence(vec![Nested::Sequence(vec![])])])
@@ -965,10 +949,8 @@ mod tests {
                 .set_raw(&ctx, Value::Integer(1), Value::Integer(7))
                 .unwrap();
             let root = Table::new(&ctx);
-            root.set_raw(&ctx, Value::Integer(1), child.into())
-                .unwrap();
-            root.set_raw(&ctx, Value::Integer(2), child.into())
-                .unwrap();
+            root.set_raw(&ctx, Value::Integer(1), child.into()).unwrap();
+            root.set_raw(&ctx, Value::Integer(2), child.into()).unwrap();
 
             assert_eq!(
                 from_value::<Nested>(root.into()).unwrap(),
