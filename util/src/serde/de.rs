@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{cell::Cell, fmt, rc::Rc};
 
 use lunita::{Table, Value, table::NextValue};
 use serde::de;
@@ -23,17 +23,160 @@ impl de::Error for Error {
     }
 }
 
+const DEFAULT_MAX_DEPTH: usize = 128;
+const DEFAULT_MAX_VALUES: usize = 10_000_000;
+
+/// Options controlling deserialization from Lua values.
+///
+/// The tables are the script's, the native stack and the time spent reading them are the
+/// host's: both limits bound what a table built by a script can cost the host that
+/// deserializes it.
+#[derive(Debug, Copy, Clone)]
+#[non_exhaustive]
+pub struct Options {
+    /// The maximum number of nested Lua tables that may be traversed, 128 by default.
+    ///
+    /// The root table, when present, has depth one. A limit of zero rejects all tables but still
+    /// permits scalar values. Every level takes native stack (about 2 KiB of it in an
+    /// unoptimized build with a hand-written visitor, more with larger ones), so a host raising
+    /// the limit needs the stack for it.
+    pub max_depth: usize,
+    /// The maximum number of Lua values that may be read out of tables, 10,000,000 by default:
+    /// an optimized build reads that many in half a second when they are numbers and in about
+    /// three when they are small tables.
+    ///
+    /// Every key, value and element taken from a table counts, and those of a table reached
+    /// more than once count each time it is reached: a table is deserialized once for every
+    /// path that leads to it, so a few tables that each hold the next one twice are an
+    /// exponential number of values. The root value does not count.
+    pub max_values: usize,
+}
+
+impl Options {
+    /// Sets the maximum number of nested Lua tables that may be traversed.
+    pub const fn max_depth(mut self, max_depth: usize) -> Self {
+        self.max_depth = max_depth;
+        self
+    }
+
+    /// Sets the maximum number of Lua values that may be read out of tables.
+    pub const fn max_values(mut self, max_values: usize) -> Self {
+        self.max_values = max_values;
+        self
+    }
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            max_depth: DEFAULT_MAX_DEPTH,
+            max_values: DEFAULT_MAX_VALUES,
+        }
+    }
+}
+
+/// Deserializes a Lua value with the default [`Options`].
+///
+/// A table that contains itself, tables nested deeper than [`Options::max_depth`] and more
+/// values than [`Options::max_values`] are errors.
 pub fn from_value<'gc, T: de::Deserialize<'gc>>(value: Value<'gc>) -> Result<T, Error> {
     T::deserialize(Deserializer::from_value(value))
 }
 
+/// Deserializes a Lua value within the limits of `options`.
+pub fn from_value_with<'gc, T: de::Deserialize<'gc>>(
+    value: Value<'gc>,
+    options: Options,
+) -> Result<T, Error> {
+    T::deserialize(Deserializer::from_value_with(value, options))
+}
+
+#[derive(Clone)]
+struct DeserializationContext<'gc> {
+    active_table: Option<Rc<ActiveTable<'gc>>>,
+    options: Options,
+    /// How many more values may be read out of tables, shared by every deserializer of one
+    /// deserialization.
+    remaining_values: Rc<Cell<usize>>,
+}
+
+struct ActiveTable<'gc> {
+    table: Table<'gc>,
+    parent: Option<Rc<ActiveTable<'gc>>>,
+    depth: usize,
+}
+
+impl<'gc> DeserializationContext<'gc> {
+    fn new(options: Options) -> Self {
+        Self {
+            active_table: None,
+            options,
+            remaining_values: Rc::new(Cell::new(options.max_values)),
+        }
+    }
+
+    fn enter_table(&self, table: Table<'gc>) -> Result<Self, Error> {
+        let mut ancestor = self.active_table.as_deref();
+        while let Some(active) = ancestor {
+            if active.table == table {
+                return Err(de::Error::custom(
+                    "cyclic table detected during deserialization",
+                ));
+            }
+            ancestor = active.parent.as_deref();
+        }
+
+        let current_depth = self.active_table.as_ref().map_or(0, |active| active.depth);
+        if current_depth >= self.options.max_depth {
+            return Err(de::Error::custom(format_args!(
+                "maximum table nesting depth of {} exceeded",
+                self.options.max_depth
+            )));
+        }
+
+        Ok(Self {
+            active_table: Some(Rc::new(ActiveTable {
+                table,
+                parent: self.active_table.clone(),
+                depth: current_depth + 1,
+            })),
+            options: self.options,
+            remaining_values: self.remaining_values.clone(),
+        })
+    }
+
+    /// A deserializer for a key, value or element of the active table, counted against
+    /// `max_values`.
+    fn deserializer(&self, value: Value<'gc>) -> Result<Deserializer<'gc>, Error> {
+        let Some(remaining) = self.remaining_values.get().checked_sub(1) else {
+            return Err(de::Error::custom(format_args!(
+                "maximum of {} values in tables exceeded",
+                self.options.max_values
+            )));
+        };
+        self.remaining_values.set(remaining);
+        Ok(Deserializer {
+            value,
+            context: self.clone(),
+        })
+    }
+}
+
 pub struct Deserializer<'gc> {
     value: Value<'gc>,
+    context: DeserializationContext<'gc>,
 }
 
 impl<'gc> Deserializer<'gc> {
     pub fn from_value(value: Value<'gc>) -> Self {
-        Self { value }
+        Self::from_value_with(value, Options::default())
+    }
+
+    pub fn from_value_with(value: Value<'gc>, options: Options) -> Self {
+        Self {
+            value,
+            context: DeserializationContext::new(options),
+        }
     }
 }
 
@@ -271,7 +414,8 @@ impl<'gc> de::Deserializer<'gc> for Deserializer<'gc> {
         V: de::Visitor<'gc>,
     {
         if let Value::Table(table) = self.value {
-            visitor.visit_seq(Seq::new(table))
+            let context = self.context.enter_table(table)?;
+            visitor.visit_seq(Seq::new(table, context))
         } else {
             Err(Error::TypeError {
                 expected: "table",
@@ -285,10 +429,12 @@ impl<'gc> de::Deserializer<'gc> for Deserializer<'gc> {
         V: de::Visitor<'gc>,
     {
         if let Value::Table(table) = self.value {
+            let context = self.context.enter_table(table)?;
             visitor.visit_seq(Tuple::new(
                 table,
                 len.try_into()
                     .map_err(|_| de::Error::custom("tuple length out of range"))?,
+                context,
             ))
         } else {
             Err(Error::TypeError {
@@ -315,7 +461,8 @@ impl<'gc> de::Deserializer<'gc> for Deserializer<'gc> {
         V: de::Visitor<'gc>,
     {
         if let Value::Table(table) = self.value {
-            visitor.visit_map(Map::new(table))
+            let context = self.context.enter_table(table)?;
+            visitor.visit_map(Map::new(table, context))
         } else {
             Err(Error::TypeError {
                 expected: "table",
@@ -346,12 +493,17 @@ impl<'gc> de::Deserializer<'gc> for Deserializer<'gc> {
         V: de::Visitor<'gc>,
     {
         match self.value {
-            Value::Table(table) => match table.next(Value::Nil) {
-                NextValue::Found { key, value } => visitor.visit_enum(Enum::new(key, value)),
-                NextValue::Last => Err(de::Error::custom("enum table has no entries")),
-                NextValue::NotFound => unreachable!(),
-            },
-            v => visitor.visit_enum(UnitEnum::new(v)),
+            Value::Table(table) => {
+                let context = self.context.enter_table(table)?;
+                match table.next(Value::Nil) {
+                    NextValue::Found { key, value } => {
+                        visitor.visit_enum(Enum::new(key, value, context))
+                    }
+                    NextValue::Last => Err(de::Error::custom("enum table has no entries")),
+                    NextValue::NotFound => unreachable!(),
+                }
+            }
+            v => visitor.visit_enum(UnitEnum::new(v, self.context)),
         }
     }
 
@@ -373,11 +525,16 @@ impl<'gc> de::Deserializer<'gc> for Deserializer<'gc> {
 pub struct Seq<'gc> {
     table: Table<'gc>,
     ind: i64,
+    context: DeserializationContext<'gc>,
 }
 
 impl<'gc> Seq<'gc> {
-    fn new(table: Table<'gc>) -> Self {
-        Self { table, ind: 1 }
+    fn new(table: Table<'gc>, context: DeserializationContext<'gc>) -> Self {
+        Self {
+            table,
+            ind: 1,
+            context,
+        }
     }
 }
 
@@ -392,7 +549,7 @@ impl<'gc> de::SeqAccess<'gc> for Seq<'gc> {
         if v.is_nil() {
             Ok(None)
         } else {
-            let res = Some(seed.deserialize(Deserializer::from_value(v))?);
+            let res = Some(seed.deserialize(self.context.deserializer(v)?)?);
             self.ind = self
                 .ind
                 .checked_add(1)
@@ -406,11 +563,17 @@ pub struct Tuple<'gc> {
     table: Table<'gc>,
     len: i64,
     ind: i64,
+    context: DeserializationContext<'gc>,
 }
 
 impl<'gc> Tuple<'gc> {
-    fn new(table: Table<'gc>, len: i64) -> Self {
-        Self { table, len, ind: 1 }
+    fn new(table: Table<'gc>, len: i64, context: DeserializationContext<'gc>) -> Self {
+        Self {
+            table,
+            len,
+            ind: 1,
+            context,
+        }
     }
 }
 
@@ -425,7 +588,7 @@ impl<'gc> de::SeqAccess<'gc> for Tuple<'gc> {
             Ok(None)
         } else {
             let v = self.table.get_raw(Value::Integer(self.ind));
-            let res = Some(seed.deserialize(Deserializer::from_value(v))?);
+            let res = Some(seed.deserialize(self.context.deserializer(v)?)?);
             self.ind += 1;
             Ok(res)
         }
@@ -436,14 +599,16 @@ pub struct Map<'gc> {
     table: Table<'gc>,
     key: Value<'gc>,
     value: Value<'gc>,
+    context: DeserializationContext<'gc>,
 }
 
 impl<'gc> Map<'gc> {
-    fn new(table: Table<'gc>) -> Self {
+    fn new(table: Table<'gc>, context: DeserializationContext<'gc>) -> Self {
         Self {
             table,
             key: Value::Nil,
             value: Value::Nil,
+            context,
         }
     }
 }
@@ -459,7 +624,7 @@ impl<'gc> de::MapAccess<'gc> for Map<'gc> {
             NextValue::Found { key, value } => {
                 self.key = key;
                 self.value = value;
-                seed.deserialize(Deserializer::from_value(self.key))
+                seed.deserialize(self.context.deserializer(self.key)?)
                     .map(Some)
             }
             NextValue::Last => Ok(None),
@@ -471,18 +636,23 @@ impl<'gc> de::MapAccess<'gc> for Map<'gc> {
     where
         V: de::DeserializeSeed<'gc>,
     {
-        seed.deserialize(Deserializer::from_value(self.value))
+        seed.deserialize(self.context.deserializer(self.value)?)
     }
 }
 
 pub struct Enum<'gc> {
     key: Value<'gc>,
     value: Value<'gc>,
+    context: DeserializationContext<'gc>,
 }
 
 impl<'gc> Enum<'gc> {
-    fn new(key: Value<'gc>, value: Value<'gc>) -> Self {
-        Self { key, value }
+    fn new(key: Value<'gc>, value: Value<'gc>, context: DeserializationContext<'gc>) -> Self {
+        Self {
+            key,
+            value,
+            context,
+        }
     }
 }
 
@@ -495,19 +665,20 @@ impl<'gc> de::EnumAccess<'gc> for Enum<'gc> {
         V: de::DeserializeSeed<'gc>,
     {
         Ok((
-            seed.deserialize(Deserializer::from_value(self.key))?,
-            Variant::new(self.value),
+            seed.deserialize(self.context.deserializer(self.key)?)?,
+            Variant::new(self.value, self.context),
         ))
     }
 }
 
 pub struct Variant<'gc> {
     value: Value<'gc>,
+    context: DeserializationContext<'gc>,
 }
 
 impl<'gc> Variant<'gc> {
-    fn new(value: Value<'gc>) -> Self {
-        Self { value }
+    fn new(value: Value<'gc>, context: DeserializationContext<'gc>) -> Self {
+        Self { value, context }
     }
 }
 
@@ -515,21 +686,21 @@ impl<'gc> de::VariantAccess<'gc> for Variant<'gc> {
     type Error = Error;
 
     fn unit_variant(self) -> Result<(), Error> {
-        de::Deserialize::deserialize(Deserializer::from_value(self.value))
+        de::Deserialize::deserialize(self.context.deserializer(self.value)?)
     }
 
     fn newtype_variant_seed<T>(self, seed: T) -> Result<T::Value, Error>
     where
         T: de::DeserializeSeed<'gc>,
     {
-        seed.deserialize(Deserializer::from_value(self.value))
+        seed.deserialize(self.context.deserializer(self.value)?)
     }
 
     fn tuple_variant<V>(self, len: usize, visitor: V) -> Result<V::Value, Error>
     where
         V: de::Visitor<'gc>,
     {
-        de::Deserializer::deserialize_tuple(Deserializer::from_value(self.value), len, visitor)
+        de::Deserializer::deserialize_tuple(self.context.deserializer(self.value)?, len, visitor)
     }
 
     fn struct_variant<V>(
@@ -540,17 +711,18 @@ impl<'gc> de::VariantAccess<'gc> for Variant<'gc> {
     where
         V: de::Visitor<'gc>,
     {
-        de::Deserializer::deserialize_map(Deserializer::from_value(self.value), visitor)
+        de::Deserializer::deserialize_map(self.context.deserializer(self.value)?, visitor)
     }
 }
 
 pub struct UnitEnum<'gc> {
     key: Value<'gc>,
+    context: DeserializationContext<'gc>,
 }
 
 impl<'gc> UnitEnum<'gc> {
-    fn new(key: Value<'gc>) -> Self {
-        Self { key }
+    fn new(key: Value<'gc>, context: DeserializationContext<'gc>) -> Self {
+        Self { key, context }
     }
 }
 
@@ -562,8 +734,12 @@ impl<'gc> de::EnumAccess<'gc> for UnitEnum<'gc> {
     where
         V: de::DeserializeSeed<'gc>,
     {
+        // The key is the value this enum was deserialized from, counted already if a table held it.
         Ok((
-            seed.deserialize(Deserializer::from_value(self.key))?,
+            seed.deserialize(Deserializer {
+                value: self.key,
+                context: self.context,
+            })?,
             UnitVariant::new(),
         ))
     }
@@ -643,5 +819,307 @@ fn is_sequence<'gc>(table: Table<'gc>) -> bool {
             NextValue::Last => return true,
             NextValue::NotFound => unreachable!(),
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fmt;
+
+    use lunita::{Lua, Table, Value};
+    use serde::de::{self, Deserialize, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor};
+
+    use super::{Error, Options, from_value, from_value_with};
+
+    #[derive(Debug, PartialEq)]
+    enum Nested {
+        Integer(i64),
+        Sequence(Vec<Nested>),
+        Map(Vec<(String, Nested)>),
+    }
+
+    impl<'de> Deserialize<'de> for Nested {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: de::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(NestedVisitor)
+        }
+    }
+
+    struct NestedVisitor;
+
+    impl<'de> Visitor<'de> for NestedVisitor {
+        type Value = Nested;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("an integer or nested table")
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(Nested::Integer(value))
+        }
+
+        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut values = Vec::new();
+            while let Some(value) = sequence.next_element()? {
+                values.push(value);
+            }
+            Ok(Nested::Sequence(values))
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut values = Vec::new();
+            while let Some(entry) = map.next_entry()? {
+                values.push(entry);
+            }
+            Ok(Nested::Map(values))
+        }
+    }
+
+    #[derive(Debug)]
+    struct RecursiveEnum;
+
+    impl<'de> Deserialize<'de> for RecursiveEnum {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: de::Deserializer<'de>,
+        {
+            deserializer.deserialize_enum("RecursiveEnum", &["Node"], RecursiveEnumVisitor)
+        }
+    }
+
+    struct RecursiveEnumVisitor;
+
+    impl<'de> Visitor<'de> for RecursiveEnumVisitor {
+        type Value = RecursiveEnum;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a recursive enum")
+        }
+
+        fn visit_enum<A>(self, data: A) -> Result<Self::Value, A::Error>
+        where
+            A: EnumAccess<'de>,
+        {
+            let (_name, variant) = data.variant::<String>()?;
+            variant.newtype_variant::<RecursiveEnum>()?;
+            Ok(RecursiveEnum)
+        }
+    }
+
+    fn assert_cycle(error: Error) {
+        assert_eq!(
+            error.to_string(),
+            "cyclic table detected during deserialization"
+        );
+    }
+
+    #[test]
+    fn recursive_table_adapters_reject_cycles() {
+        Lua::core().enter(|ctx| {
+            let sequence = Table::new(&ctx);
+            sequence
+                .set_raw(&ctx, Value::Integer(1), sequence.into())
+                .unwrap();
+            assert_cycle(from_value::<Nested>(sequence.into()).unwrap_err());
+            assert_cycle(from_value::<(Nested,)>(sequence.into()).unwrap_err());
+
+            let first = Table::new(&ctx);
+            let second = Table::new(&ctx);
+            first
+                .set_raw(&ctx, Value::Integer(1), second.into())
+                .unwrap();
+            second
+                .set_raw(&ctx, Value::Integer(1), first.into())
+                .unwrap();
+            assert_cycle(from_value::<Nested>(first.into()).unwrap_err());
+
+            let map = Table::new(&ctx);
+            map.set(ctx, "self", map).unwrap();
+            assert_cycle(from_value::<Nested>(map.into()).unwrap_err());
+
+            let enumeration = Table::new(&ctx);
+            enumeration.set(ctx, "Node", enumeration).unwrap();
+            assert_cycle(from_value::<RecursiveEnum>(enumeration.into()).unwrap_err());
+        });
+    }
+
+    #[test]
+    fn table_depth_limit_is_configurable() {
+        Lua::core().enter(|ctx| {
+            assert_eq!(
+                from_value_with::<i64>(Value::Integer(7), Options::default().max_depth(0)).unwrap(),
+                7
+            );
+
+            let leaf = Table::new(&ctx);
+            let middle = Table::new(&ctx);
+            middle
+                .set_raw(&ctx, Value::Integer(1), leaf.into())
+                .unwrap();
+            let root = Table::new(&ctx);
+            root.set_raw(&ctx, Value::Integer(1), middle.into())
+                .unwrap();
+
+            let error = from_value_with::<Nested>(root.into(), Options::default().max_depth(2))
+                .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "maximum table nesting depth of 2 exceeded"
+            );
+
+            let value =
+                from_value_with::<Nested>(root.into(), Options::default().max_depth(3)).unwrap();
+            assert_eq!(
+                value,
+                Nested::Sequence(vec![Nested::Sequence(vec![Nested::Sequence(vec![])])])
+            );
+        });
+    }
+
+    #[test]
+    fn repeated_acyclic_tables_are_allowed() {
+        Lua::core().enter(|ctx| {
+            let child = Table::new(&ctx);
+            child
+                .set_raw(&ctx, Value::Integer(1), Value::Integer(7))
+                .unwrap();
+            let root = Table::new(&ctx);
+            root.set_raw(&ctx, Value::Integer(1), child.into()).unwrap();
+            root.set_raw(&ctx, Value::Integer(2), child.into()).unwrap();
+
+            assert_eq!(
+                from_value::<Nested>(root.into()).unwrap(),
+                Nested::Sequence(vec![
+                    Nested::Sequence(vec![Nested::Integer(7)]),
+                    Nested::Sequence(vec![Nested::Integer(7)]),
+                ])
+            );
+        });
+    }
+
+    /// `depth` tables, each the only element of the one around it.
+    fn nested_sequences<'gc>(ctx: lunita::Context<'gc>, depth: usize) -> Table<'gc> {
+        let mut table = Table::new(&ctx);
+        for _ in 1..depth {
+            let outer = Table::new(&ctx);
+            outer
+                .set_raw(&ctx, Value::Integer(1), table.into())
+                .unwrap();
+            table = outer;
+        }
+        table
+    }
+
+    #[test]
+    fn default_depth_limit() {
+        // A test thread has 2 MiB of stack: the default depth has to fit it unoptimized.
+        Lua::core().enter(|ctx| {
+            let mut expected = Nested::Sequence(vec![]);
+            for _ in 1..128 {
+                expected = Nested::Sequence(vec![expected]);
+            }
+            assert_eq!(
+                from_value::<Nested>(nested_sequences(ctx, 128).into()).unwrap(),
+                expected
+            );
+
+            let error = from_value::<Nested>(nested_sequences(ctx, 129).into()).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "maximum table nesting depth of 128 exceeded"
+            );
+        });
+    }
+
+    #[test]
+    fn value_limit_counts_what_tables_hold() {
+        Lua::core().enter(|ctx| {
+            // The root value is not counted.
+            assert_eq!(
+                from_value_with::<i64>(Value::Integer(7), Options::default().max_values(0))
+                    .unwrap(),
+                7
+            );
+            let empty = Table::new(&ctx);
+            assert_eq!(
+                from_value_with::<Nested>(empty.into(), Options::default().max_values(0)).unwrap(),
+                Nested::Sequence(vec![])
+            );
+
+            // A key, the table it leads to and that table's element.
+            let inner = Table::new(&ctx);
+            inner
+                .set_raw(&ctx, Value::Integer(1), Value::Integer(7))
+                .unwrap();
+            let map = Table::new(&ctx);
+            map.set(ctx, "inner", inner).unwrap();
+            assert_eq!(
+                from_value_with::<Nested>(map.into(), Options::default().max_values(3)).unwrap(),
+                Nested::Map(vec![(
+                    "inner".to_owned(),
+                    Nested::Sequence(vec![Nested::Integer(7)])
+                )])
+            );
+            let error = from_value_with::<Nested>(map.into(), Options::default().max_values(2))
+                .unwrap_err();
+            assert_eq!(error.to_string(), "maximum of 2 values in tables exceeded");
+
+            // A tuple counts its elements, an enum its key and its value.
+            assert_eq!(
+                from_value_with::<(i64,)>(inner.into(), Options::default().max_values(1)).unwrap(),
+                (7,)
+            );
+            let error = from_value_with::<(i64,)>(inner.into(), Options::default().max_values(0))
+                .unwrap_err();
+            assert_eq!(error.to_string(), "maximum of 0 values in tables exceeded");
+
+            let leaf = Table::new(&ctx);
+            leaf.set(ctx, "Node", Value::Integer(7)).unwrap();
+            let enumeration = Table::new(&ctx);
+            enumeration.set(ctx, "Node", leaf).unwrap();
+            let error = from_value_with::<RecursiveEnum>(
+                enumeration.into(),
+                Options::default().max_values(1),
+            )
+            .unwrap_err();
+            assert_eq!(error.to_string(), "maximum of 1 values in tables exceeded");
+        });
+    }
+
+    #[test]
+    fn value_limit_bounds_shared_tables() {
+        Lua::core().enter(|ctx| {
+            // 64 tables, each holding the next one twice: 2^64 paths to the last one.
+            let mut table = Table::new(&ctx);
+            for _ in 1..64 {
+                let outer = Table::new(&ctx);
+                outer
+                    .set_raw(&ctx, Value::Integer(1), table.into())
+                    .unwrap();
+                outer
+                    .set_raw(&ctx, Value::Integer(2), table.into())
+                    .unwrap();
+                table = outer;
+            }
+
+            let error =
+                from_value_with::<Nested>(table.into(), Options::default().max_values(10_000))
+                    .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "maximum of 10000 values in tables exceeded"
+            );
+        });
     }
 }
